@@ -202,6 +202,7 @@ async function run(fn, message) {
 }
 function modal(title, html) { $('dialogTitle').textContent = title; $('body').innerHTML = html; $('modal').showModal(); }
 $('close').onclick = () => $('modal').close();
+$('plannerLink').onclick = () => { location.href = '../planner/'; };
 window.addEventListener('beforeunload', e => { if (dirty) e.preventDefault(); });
 
 load();

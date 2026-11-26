@@ -243,7 +243,7 @@ textarea{width:100%;font:inherit;border:1px solid #c7d1cb;border-radius:6px;padd
 :root{--control-h:38px;--field-min:190px;--field-gap:6px;--row-gap:16px}
 input:not([type=checkbox]):not([type=radio]),select{height:var(--control-h);width:100%;min-width:0}
 textarea{width:100%;min-width:0}
-button:not(.block):not(.task-tile):not(.link):not(.project):not(.tab){min-height:var(--control-h);white-space:nowrap}
+:where(button:not(.block):not(.task-tile):not(.tab)){min-height:var(--control-h);white-space:nowrap}
 .queue-tools select,.queue-tools input,.role select,#memberPreview,#filter,#pmProject{width:auto}
 /* Fields: label / control / hint rows line up across a row of fields (subgrid), whatever the label or hint length. */
 .formgrid,.grid-form{display:grid;column-gap:14px;row-gap:var(--row-gap);align-items:start}
@@ -297,3 +297,7 @@ button:not(.block):not(.task-tile):not(.link):not(.project):not(.tab){min-height
 .field{row-gap:0;padding-bottom:var(--row-gap)}
 .field>input,.field>select,.field>textarea,.field>.checks{margin-top:6px}
 .field .hint:not(:empty){margin-top:5px}
+/* No text links: actions and item names that open something are buttons. */
+.link,.project{background:#fff;border:1px solid var(--line);border-radius:7px;padding:6px 12px;min-height:var(--control-h);color:var(--ink);font-weight:610;display:inline-flex;align-items:center;gap:8px;text-align:left;white-space:normal}
+.link:hover,.project:hover{border-color:#81958c}
+.top .tool{margin-left:8px}

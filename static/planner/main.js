@@ -282,6 +282,7 @@ $('modal').addEventListener('close', () => { draft = null; formValues = null; })
 $('close').onclick = () => $('modal').close();
 $('simulate').onclick = () => (role === 'member' ? (tab === 'schedule' ? changeForm({ kind: 'private', who: member }) : logForm()) : changeForm());
 $('reset').onclick = () => modal('Reset sample plan?', '<p>This restores the original assignments and time off and removes the changes you applied to the demo.</p><div class="actions"><button data-dismiss>Cancel</button><button id="confirmReset" class="primary">Reset demo</button></div>');
+$('settingsLink').onclick = () => { location.href = '../settings/'; };
 $('refresh').onclick = async () => {
   $('refresh').disabled = true; announce('Reading Jira…');
   try { useWorkspace(await call('refresh')); render(); announce('Refreshed from Jira.' + (state.unmapped.length ? ' ' + state.unmapped.length + ' issues need mapping in Relay settings.' : '')); }
