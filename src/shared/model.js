@@ -304,10 +304,17 @@ export function createModel(settings, todayIso) {
     } else if (v.kind === 'leave') {
       const w = personIdx(v.who), start = slotIdx(v.start), days = Number(v.days);
       if (!Number.isInteger(days) || days < 1 || days > 60) throw new UserError('Choose 1 to 60 days away.');
+      // `from` is the start of an existing entry being rescheduled: it is replaced instead of added to.
+      const moving = v.from != null && v.from !== '';
+      if (moving) {
+        const at = next.leave.findIndex(x => x.who === w && x.start === Number(v.from));
+        if (at < 0) throw new UserError('This time off no longer exists.');
+        next.leave.splice(at, 1);
+      }
       const len = days * spd, existing = next.leave.filter(x => x.who === w);
       if (Array.from({ length: len }, (_, k) => start + k).every(d => existing.some(l => l.start <= d && l.start + l.len > d))) throw new UserError('This person is already away for those dates.');
       next.leave.push({ who: w, start, len });
-      summary = who(w).name + ' away · ' + span(start, start + len - 1);
+      summary = who(w).name + (moving ? ' · Time off moved to ' : ' away · ') + span(start, start + len - 1);
     } else if (v.kind === 'extend') {
       const t = task(v.taskId);
       if (t.actual != null) throw new UserError('This task is already finished.');
@@ -337,6 +344,11 @@ export function createModel(settings, todayIso) {
     } else if (op.kind === 'releasePrivate') {
       next.privateTime = next.privateTime.filter(b => b.id !== op.id);
       message = 'Private time released.';
+    } else if (op.kind === 'releaseLeave') {
+      const at = next.leave.findIndex(x => x.who === Number(op.who) && x.start === Number(op.start));
+      if (at < 0) throw new UserError('This time off no longer exists.');
+      const [gone] = next.leave.splice(at, 1);
+      message = who(gone.who).name + ' · Time off removed · ' + span(gone.start, gone.start + gone.len - 1);
     } else if (op.kind === 'note') {
       const p = Number(op.p);
       if (!projects[p]) throw new UserError('Choose a project.');

@@ -6,8 +6,8 @@ import { sampleSettings, sampleState, liveSettings } from './shared/defaults.js'
 import { validateSettings } from './shared/validate.js';
 import { mapIssues, historyFromIssues, mergeTasks, issueFields } from './shared/jira-map.js';
 
-const MEMBER_OPS = new Set(['start', 'log', 'deleteLog', 'releasePrivate', 'draft']);
-const MEMBER_DRAFTS = new Set(['private', 'pause', 'resume', 'estimate', 'finish', 'revise']);
+const MEMBER_OPS = new Set(['start', 'log', 'deleteLog', 'releasePrivate', 'releaseLeave', 'draft']);
+const MEMBER_DRAFTS = new Set(['private', 'leave', 'pause', 'resume', 'estimate', 'finish', 'revise']);
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const monthOf = iso => String(iso).slice(0, 7);
 const utcToday = () => new Date().toISOString().slice(0, 10);
@@ -197,7 +197,7 @@ export function createService({ store, jira, today = utcToday }) {
     return { settings, state: await redact(state, me, createModel(settings, ctx.today)), me, today: ctx.today, range: period, timeInJira: liveTime(settings) };
   }
 
-  function authorize(me, op, model, state) {
+  function authorize(me, op, model, state, settings) {
     if (me.demo || me.access === 'team') return;
     if (me.access === 'pm') {
       if (op.kind === 'note' && me.pmProjects.includes(Number(op.p))) return;
@@ -208,6 +208,11 @@ export function createService({ store, jira, today = utcToday }) {
     if (op.kind === 'draft' && op.v.kind === 'private') {
       const block = op.v.blockId && state.privateTime.find(b => b.id === op.v.blockId);
       if (Number(op.v.who) !== me.person || (block && block.who !== me.person)) throw new UserError('You can only protect your own time.');
+      return;
+    }
+    if (op.kind === 'releaseLeave' || (op.kind === 'draft' && op.v.kind === 'leave')) {
+      if (!settings.general.memberLeave) throw new UserError('Ask the team manager to make this change.');
+      if (Number(op.kind === 'draft' ? op.v.who : op.who) !== me.person) throw new UserError('You can only change your own time off.');
       return;
     }
     if (op.kind === 'releasePrivate') {
@@ -245,7 +250,7 @@ export function createService({ store, jira, today = utcToday }) {
       if (!me) throw new UserError('You are not on the planning team.');
       if (!op || typeof op.kind !== 'string') throw new UserError('Unknown change.');
       const model = createModel(settings, ctx.today);
-      authorize(me, op, model, state);
+      authorize(me, op, model, state, settings);
 
       if (op.kind === 'log' || op.kind === 'deleteLog') {
         if (liveTime(settings)) return workspace(ctx, demo, weekOf(await writeWorklog(settings, state, op)));

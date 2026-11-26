@@ -47,6 +47,7 @@ export function validateSettings(input, prev) {
     minSamples: num(gi.minSamples, 1, 50, 'Minimum history samples', true),
     historyMonths: num(gi.historyMonths, 1, 60, 'History window', true),
     blockLinkType: str(gi.blockLinkType ?? 'Blocks', 60, 'Dependency link type'),
+    memberLeave: !!gi.memberLeave, // members may add, move and remove their own time off
     internalIssue: /^([A-Z][A-Z0-9_]*-\d+)?$/.test(String(gi.internalIssue ?? '').trim().toUpperCase()) ? String(gi.internalIssue ?? '').trim().toUpperCase() : fail('Internal work issue must be an issue key like ADMIN-12.'),
     storyPointsField: /^[a-zA-Z0-9_]{0,40}$/.test(gi.storyPointsField ?? '') ? (gi.storyPointsField ?? '') : fail('Story points field must look like customfield_10016.')
   };

@@ -138,7 +138,9 @@ function render() {
   $('footnote').textContent = me.demo ? 'Demo portfolio · Fictional data · Switch to live mode in Relay settings' : 'Live plan · ' + (state.refreshedAt ? 'Jira refreshed ' + new Date(state.refreshedAt).toLocaleString('en-GB') : 'Not refreshed from Jira yet') + (state.unmapped.length && role === 'team' ? ' · ' + state.unmapped.length + ' Jira issues need mapping (see settings)' : '');
   $('simulate').hidden = !(role === 'team' && ['home', 'queue', 'schedule', 'coverage'].includes(tab) || personal && ['home', 'sheet', 'schedule'].includes(tab));
   $('simulate').textContent = personal ? (tab === 'schedule' ? 'Protect time' : '＋ Log time') : '＋ Add task';
-  $('otherChanges').hidden = $('simulate').hidden || personal;
+  const ownLeave = personal && tab === 'schedule' && settings.general.memberLeave;
+  $('otherChanges').hidden = $('simulate').hidden || (personal && !ownLeave);
+  $('otherChanges').textContent = personal ? 'Time off' : 'Other changes';
   const title = tab === 'home' ? (personal ? 'My work' : 'Team overview') : tab === 'sheet' ? 'My timesheet' : tab === 'schedule' && personal ? 'My calendar' : tab === 'schedule' && pm ? 'Project calendar' : tab === 'report' ? (personal ? 'My report' : pm ? 'Project report' : 'Team report') : pageInfo[tab][0];
   $('title').textContent = title;
   const counts = active(people).length + ' people across ' + active(projects).length + ' projects';
@@ -160,6 +162,7 @@ function render() {
 
 function board() {
   // A project manager sees the people on their project; work on other projects only as busy time.
+  const canLeave = role === 'team' || (role === 'member' && settings.general.memberLeave);
   const pmMode = role === 'pm', mine = pmMode ? (pmCal === 'all' ? me.pmProjects : [Number(pmCal)]) : [];
   const onProject = w => mine.some(i => projects[i] && (w === projects[i].lead || w === projects[i].back)) || state.tasks.some(t => mine.includes(t.p) && plan.get(t.id)?.who === w);
   const busy = '<div class="block other" style="STYLE" title="Busy with other work"><b>Other work</b><small>Busy</small></div>';
@@ -201,9 +204,8 @@ function board() {
       if (workEnd < x.end) addWorking(workEnd, x.end, card('buffer', 'Buffer', projects[t.p].name + ' · ' + t.name));
     }
     for (const block of state.privateTime.filter(x => x.who === w)) add(block.start, block.start + block.len, pmMode ? plain('private', 'Unavailable', 'Private time') : plain('private', dense ? 'Private' : 'Private time', block.name, 'data-private="' + block.id + '"'));
-    const away = new Set();
-    for (const l of state.leave.filter(l => l.who === w)) for (let d = l.start; d < l.start + l.len; d++) away.add(d);
-    for (let d = start; d < start + cols; d++) { if (!away.has(d)) continue; let e = d + 1; while (e < start + cols && away.has(e)) e++; add(d, e, plain('away', 'Time off', 'Unavailable')); d = e - 1; }
+    // One block per time-off entry, so it can be opened to reschedule or remove it.
+    for (const l of state.leave.filter(l => l.who === w)) add(l.start, l.start + l.len, plain('away', 'Time off', 'Unavailable', canLeave ? 'data-leave-who="' + w + '" data-leave-start="' + l.start + '"' : ''));
     for (let d = start; d < start + cols; d++) { if (!off(w, d)) continue; let e = d + 1; while (e < start + cols && off(w, e)) e++; add(d, e, M.isHoliday(d) ? plain('away', 'Holiday', 'Public holiday') : plain('away', dense ? 'Off' : 'Not working', 'Outside working hours')); d = e - 1; }
     // Free time from now on, so managers can see where a task fits; clicking it starts "Add a task" there.
     const load = role === 'member' ? [] : loadSlots(start, cols, w).map((k, i) => (k === 'free' && start + i < M.now ? 'past' : k));
@@ -301,7 +303,7 @@ function changeForm(v = {}) {
   const dates = Array.from({ length: (endWeek() + 2) * weekSlots }, (_, i) => i).filter(i => i >= M.now).map(i => [i, slotLabel(i)]);
   const dayDates = dates.filter(([i]) => i % spd === 0).map(([i]) => [i, fmt(i, { weekday: 'short', month: 'short', day: 'numeric' })]);
   const hourChoices = Array.from({ length: 20 }, (_, i) => [(i + 1) * slotH, (i + 1) * slotH + 'h']);
-  const dayChoices = Array.from({ length: 10 }, (_, i) => [i + 1, (i + 1) + ' workday' + (i ? 's' : '')]);
+  const dayChoices = Array.from({ length: 60 }, (_, i) => [i + 1, (i + 1) + ' workday' + (i ? 's' : '')]);
   const footer = '<div class="actions"><button type="button" data-dismiss>Cancel</button><button class="primary" type="submit">Preview impact →</button></div>';
   if (['estimate', 'finish', 'revise'].includes(kind)) {
     const t = state.tasks.find(t => t.id === v.taskId);
@@ -322,7 +324,9 @@ function changeForm(v = {}) {
     modal('Task timing', '<p><b>' + esc(projects[task.p].name) + ' · ' + esc(task.name) + '</b><br>Currently planned for ' + slotLabel(plan.get(task.id).start) + '.</p><form id="changeForm"><input type="hidden" name="kind" value="timing"><input type="hidden" name="taskId" value="' + task.id + '"><label class="field">Fixed start date (optional)<input type="date" name="stamp" min="' + settings.general.planStart + '" value="' + esc(stamp) + '"></label><p class="sub">Use an agreed date to anchor the start and share this task and date with the PM. Leave blank for flexible scheduling.</p>' + footer + '</form>');
     return;
   }
-  let fields = role === 'pm' ? '<input type="hidden" name="kind" value="queued">' : role === 'member' && kind === 'private' ? '<input type="hidden" name="kind" value="private"><input type="hidden" name="who" value="' + member + '">' : isTask ? selectField('Priority', 'kind', [['queued', 'Normal: joins the queue'], ['urgent', 'Urgent: goes first']], kind, true) : selectField('Change', 'kind', [['leave', 'Mark a person away'], ...(state.tasks.some(t => t.actual == null) ? [['extend', 'Extend an existing task']] : []), ['private', 'Protect private team time']], kind, true);
+  // Rescheduling time off (`from` is the entry's current start) keeps the person and the kind of change fixed.
+  const moving = kind === 'leave' && v.from != null && v.from !== '', current = moving && state.leave.find(l => l.who === Number(v.who) && l.start === Number(v.from));
+  let fields = role === 'pm' ? '<input type="hidden" name="kind" value="queued">' : (role === 'member' && !isTask) || moving ? '<input type="hidden" name="kind" value="' + kind + '"><input type="hidden" name="who" value="' + (role === 'member' ? member : Number(v.who)) + '">' : isTask ? selectField('Priority', 'kind', [['queued', 'Normal: joins the queue'], ['urgent', 'Urgent: goes first']], kind, true) : selectField('Change', 'kind', [['leave', 'Mark a person away'], ...(state.tasks.some(t => t.actual == null) ? [['extend', 'Extend an existing task']] : []), ['private', 'Protect private team time']], kind, true);
   if (isTask) {
     const typeList = active(types), type = Number(v.type ?? typeList[typeList.length - 1]?.[1] ?? 0);
     const sys = projects[p]?.systems ?? [], s = sys.includes(Number(v.s)) ? Number(v.s) : sys.includes(types[type]?.system) ? types[type].system : sys[0];
@@ -338,10 +342,10 @@ function changeForm(v = {}) {
       (role === 'member' ? '' : selectField('Team member', 'who', active(people).map(([x, i]) => [i, x.name]), v.who ?? 0, true)) +
       selectField('First protected slot', 'start', dates, v.start ?? Math.max(periodDays()[0] * spd, M.now)) + selectField('Duration', 'hours', hourChoices, v.hours ?? (v.len ? v.len * slotH : settings.general.workdayHours));
   }
-  if (kind === 'leave') fields += selectField('Team member', 'who', active(people).map(([x, i]) => [i, x.name]), v.who ?? 0, true) + selectField('First day away', 'start', dayDates, v.start ?? Math.max(periodDays()[0] * spd, M.now)) + selectField('Time away', 'days', dayChoices, v.days ?? 2);
+  if (kind === 'leave') fields += (moving ? '<input type="hidden" name="from" value="' + Number(v.from) + '">' : '') + (role === 'member' || moving ? '' : selectField('Team member', 'who', active(people).map(([x, i]) => [i, x.name]), v.who ?? 0, true)) + selectField('First day away', 'start', dayDates, v.start ?? Math.max(periodDays()[0] * spd, M.now)) + selectField('Time away', 'days', dayChoices, v.days ?? 2);
   if (kind === 'extend') fields += selectField('Task', 'taskId', state.tasks.filter(t => t.actual == null).map(t => [t.id, projects[t.p].name + ' · ' + t.name]), v.taskId, true) + selectField('Additional expected hours', 'hours', hourChoices, v.hours ?? slotH, true);
   const adding = isTask;
-  modal(adding ? 'Add a task' : role === 'member' ? 'Protect time' : 'Change the plan', '<p>' + (adding ? 'Preview where it lands and what it moves before you apply it.' : 'Preview the effect on the published schedule. You decide whether to apply it.') + '</p><form id="changeForm"><div class="formgrid">' + fields + '</div>' + footer + '</form>');
+  modal(adding ? 'Add a task' : moving ? 'Reschedule time off' : kind === 'leave' && role === 'member' ? 'Time off' : role === 'member' ? 'Protect time' : 'Change the plan', '<p>' + (adding ? 'Preview where it lands and what it moves before you apply it.' : current ? esc(who(current.who).name) + ' is away ' + span(current.start, current.start + current.len - 1) + '. Choose the new dates.' : 'Preview the effect on the published schedule. You decide whether to apply it.') + '</p><form id="changeForm"><div class="formgrid">' + fields + '</div>' + footer + '</form>');
 }
 
 function preview(v) {
@@ -376,7 +380,7 @@ function announce(text) {
 $('modal').addEventListener('close', () => { draft = null; formValues = null; });
 $('close').onclick = () => $('modal').close();
 $('simulate').onclick = () => (role === 'member' ? (tab === 'schedule' ? changeForm({ kind: 'private', who: member }) : logForm()) : changeForm());
-$('otherChanges').onclick = () => changeForm({ kind: 'leave' });
+$('otherChanges').onclick = () => changeForm({ kind: 'leave', ...(role === 'member' ? { who: member } : {}) });
 $('reset').onclick = () => modal('Reset sample plan?', '<p>This restores the original assignments and time off and removes the changes you applied to the demo.</p><div class="actions"><button data-dismiss>Cancel</button><button id="confirmReset" class="primary">Reset demo</button></div>');
 $('settingsLink').onclick = () => { location.href = '../settings/'; };
 $('refresh').onclick = async () => {
@@ -435,6 +439,13 @@ document.addEventListener('click', e => {
     period = { mode: 'custom', from, to }; load();
   }
   if (b.id === 'more') { showAll = !showAll; render(); }
+  if (b.dataset.leaveStart !== undefined) {
+    const w = Number(b.dataset.leaveWho), l = state.leave.find(l => l.who === w && l.start === Number(b.dataset.leaveStart));
+    const ids = 'data-who="' + w + '" data-from="' + l.start + '"';
+    modal('Time off', '<p class="note"><b>' + esc(who(w).name) + '</b><br>' + span(l.start, l.start + l.len - 1) + ' · ' + l.len / spd + ' workday' + (l.len === spd ? '' : 's') + '</p><p>Work is planned around this time. Moving or removing it reschedules the affected tasks.</p><div class="actions"><button data-release-leave ' + ids + '>Remove time off</button><button class="primary" data-edit-leave ' + ids + '>Reschedule</button></div>');
+  }
+  if (b.hasAttribute('data-edit-leave')) { const l = state.leave.find(l => l.who === Number(b.dataset.who) && l.start === Number(b.dataset.from)); changeForm({ kind: 'leave', who: l.who, from: l.start, start: l.start, days: l.len / spd }); }
+  if (b.hasAttribute('data-release-leave')) send({ kind: 'releaseLeave', who: Number(b.dataset.who), start: Number(b.dataset.from) }, 'Time off removed.');
   if (b.id === 'apply' && draft) send({ kind: 'draft', v: formValues, baseRev: state.rev });
   if (b.id === 'confirmReset') { tab = 'home'; personFilter = 'all'; filter = 'all'; showAll = false; booted = false; send({ kind: 'reset' }, 'Sample plan restored.'); }
 });

@@ -303,6 +303,19 @@ describe('service', () => {
     expect((await store.get('plan')).privateTime).toEqual([]);
   });
 
+  it('lets members manage their own time off only when the setting allows it', async () => {
+    const store = liveStore(), svc = createService({ store, jira: null, today: () => TODAY });
+    const leave = (baseRev, v) => ({ op: { kind: 'draft', baseRev, v: { kind: 'leave', who: 0, start: 0, days: 2, ...v } } });
+    expect((await svc.handle('apply', ctx('ana'), leave(3))).error).toMatch(/team manager/); // off by default
+    await store.set('settings', { ...(await store.get('settings')), general: { ...(await store.get('settings')).general, memberLeave: true } });
+    expect((await svc.handle('apply', ctx('ana'), leave(3, { who: 1 }))).error).toMatch(/own time off/);
+    expect((await svc.handle('apply', ctx('ana'), leave(3))).state.leave).toEqual([{ who: 0, start: 0, len: 4 }]);
+    expect((await svc.handle('apply', ctx('ana'), leave(4, { from: 0, start: 4, days: 1 }))).state.leave).toEqual([{ who: 0, start: 4, len: 2 }]); // rescheduled, not added
+    expect((await svc.handle('apply', ctx('ana'), leave(5, { from: 0 }))).error).toMatch(/no longer exists/);
+    expect((await svc.handle('apply', ctx('pia'), { op: { kind: 'releaseLeave', who: 0, start: 4 } })).error).toBeTruthy();
+    expect((await svc.handle('apply', ctx('ana'), { op: { kind: 'releaseLeave', who: 0, start: 4 } })).state.leave).toEqual([]);
+  });
+
   it('sets the Jira assignee to the planned owner', async () => {
     const store = await jiraStore(), calls = [];
     const jira = { search: async () => ({ issues: [], isLast: true }), worklogs: async () => [], updateIssue: async (...a) => calls.push(a) };
