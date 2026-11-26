@@ -3,7 +3,7 @@ import { estimate, multiplier, toSlots } from '../../src/shared/estimate.js';
 import { call, isLocal } from '../common/backend.js';
 import { $, esc, options, modal } from '../common/ui.js';
 
-let saved, s, meta, dirty = false, jiraProjects = [], search = { target: null, query: '', users: [] }, trial = { type: 0, p: 0, s: 0 };
+let saved, s, meta, dirty = false, tab = 'start', openCards = new Set(), jiraProjects = [], search = { target: null, query: '', users: [] }, trial = { type: 0, p: 0, s: 0 };
 
 const status = (text, error = false) => { $('status').textContent = text; $('status').className = 'grow ' + (error ? 'late' : 'sub'); };
 const markDirty = () => { dirty = true; status('Unsaved changes'); };
@@ -26,7 +26,12 @@ const bool = (path, value, label) => '<label><input type="checkbox" data-path="'
 const field = (label, input, hint = '', cls = '') => '<label class="field ' + cls + '"><span class="field-label">' + label + '</span>' + input + '<span class="hint">' + hint + '</span></label>';
 // A field holding several controls (checkbox groups) must not be a <label>, or clicking its title toggles the first box.
 const group = (label, inner, hint = '', cls = '') => '<div class="field ' + cls + '"><span class="field-label">' + label + '</span>' + inner + '<span class="hint">' + hint + '</span></div>';
-const card = (head, body, archived) => '<div class="card' + (archived ? ' archived' : '') + '"><div class="card-head">' + head + '</div>' + body + '</div>';
+/** A person, project or task type: a one-line summary until opened for editing. */
+const card = (key, title, summary, head, body, archived) => openCards.has(key)
+  ? '<div class="card' + (archived ? ' archived' : '') + '"><div class="card-head">' + head + '<button type="button" data-card="' + key + '">Done</button></div>' + body + '</div>'
+  : '<div class="card' + (archived ? ' archived' : '') + '"><div class="card-row"><div class="card-sum"><b>' + esc(title) + '</b><span class="hint">' + esc(summary) + '</span></div><button type="button" data-card="' + key + '" aria-label="Edit ' + esc(title) + '">Edit</button></div></div>';
+const TABS = [['start', 'Start'], ['people', 'People'], ['projects', 'Projects'], ['types', 'Task types'], ['estimation', 'Estimation'], ['calendar', 'Calendar']];
+const ROLE = { member: 'Team member', team: 'Team manager', pm: 'Project manager' }, WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 const many = (path, list, chosen) => '<div class="checks">' + list.map(([v, l]) => '<label><input type="checkbox" data-toggle="' + path + '" value="' + esc(v) + '" ' + (chosen.map(String).includes(String(v)) ? 'checked' : '') + '>' + esc(l) + '</label>').join('') + '</div>';
 const panel = (title, intro, body) => '<section class="panel"><div class="section-head"><div><h2>' + title + '</h2><p>' + intro + '</p></div></div><div class="content">' + body + '</div></section>';
 // rows are arrays of cell HTML; data-label lets phones show each row as a labelled block.
@@ -44,10 +49,17 @@ function getPath(path) { return path.split('.').reduce((o, k) => o[k], s); }
 function render() {
   const g = s.general;
   $('plannerLink').hidden = !isLocal;
-  const mode = panel('Mode', s.demo ? 'Relay is showing the fictional demo team. Switch to live to plan real Jira work.' : 'Relay plans issues from the connected Jira projects.',
-    '<div class="modebox"><span class="badge">' + (s.demo ? 'DEMO' : 'LIVE') + '</span><button id="switchMode">' + (s.demo ? 'Switch to live Jira data…' : 'Switch back to demo data…') + '</button>' + (!s.demo ? '<button class="primary" id="refreshNow">↻ Refresh from Jira now</button>' : '') + '</div>');
+  const team = s.people.filter(p => !p.archived), linked = team.filter(p => p.accountId).length, connected = s.projects.filter(p => p.jiraKey && !p.archived).length;
+  const step = (done, title, detail, action) => '<div class="step' + (done ? ' complete' : '') + '"><span class="step-mark" aria-hidden="true">' + (done ? '✓' : '') + '</span><div class="step-text"><b>' + title + '</b><span class="hint">' + detail + '</span></div>' + action + '</div>';
+  const go = (k, label) => '<button type="button" data-tab="' + k + '">' + label + ' →</button>';
+  const start = panel('Set up Relay', s.demo ? 'You are looking at the fictional demo team. These steps take you to planning real Jira work.' : 'Everything Relay needs, in order. Estimation and Calendar have sensible defaults.',
+    step(!s.demo, 'Use live Jira data', s.demo ? 'Demo data is shown now.' : 'Relay plans issues from your Jira projects.', '<button id="switchMode">' + (s.demo ? 'Switch to live…' : 'Back to demo…') + '</button>') +
+    step(team.length && (s.demo || linked === team.length), 'Add your team', team.length + ' people' + (s.demo ? '' : ', ' + linked + ' linked to Jira') + '. Roles, skills and working days.', go('people', 'People')) +
+    step(s.demo ? s.projects.length : connected, 'Connect projects', (s.demo ? s.projects.length + ' demo projects' : connected + ' Jira projects connected') + '. Lead, backup and project managers.', go('projects', 'Projects')) +
+    step(s.types.some(t => !t.archived && (t.issueTypes || t.components || t.labels)), 'Check task types', 'How Jira issues become tasks' + (s.demo ? '.' : ' · ' + (meta.unmappedTotal ?? 0) + ' issues need mapping.'), go('types', 'Task types')) +
+    step(!s.demo && !!meta.refreshedAt, 'Refresh from Jira', meta.refreshedAt ? 'Last refreshed ' + new Date(meta.refreshedAt).toLocaleString('en-GB') + '. Then every 5 minutes automatically.' : 'Reads the connected projects into the plan.', s.demo ? '' : '<button class="primary" id="refreshNow">↻ Refresh now</button>'));
 
-  const general = panel('Planning units', 'Everything is stored in hours and planned in slots. A slot is the smallest piece of work a person gets.',
+  const general = panel('Calendar and time', 'Working hours, planning slots, public holidays and where internal time is logged. The defaults suit most teams.',
     '<div class="grid-form">' +
     field('Hours per workday', num('general.workdayHours', g.workdayHours, 'min="1" max="24" step="1"')) +
     field('Minimum slot (hours)', num('general.slotHours', g.slotHours, 'min="1" step="1"'), 'Must divide the workday. 4h = at most 2 tasks a day.') +
@@ -77,7 +89,8 @@ function render() {
 
   const sources = [['relay', 'Relay (history / size)'], ['jira-estimate', 'Jira estimate'], ['story-points', 'Story points']];
   const types = panel('Task types', 'Each type has a default effort and buffer, where its duration comes from, and the rules that match Jira issues to it. The first matching type wins. A type without rules is only used for tasks added in Relay.',
-    s.types.map((t, i) => card(text('types.' + i + '.name', t.name, 'aria-label="Task type name"') + bool('types.' + i + '.archived', t.archived, 'Archived'), '<div class="grid-form">' +
+    s.types.map((t, i) => card('types:' + i, t.name, [s.systems[t.system], t.baseHours + 'h + ' + t.bufferHours + 'h buffer', Object.fromEntries(sources)[t.source], [t.issueTypes, t.components, t.labels].filter(Boolean).join(' / ') || 'no Jira rules', t.archived && 'archived'].filter(Boolean).join(' · '),
+      text('types.' + i + '.name', t.name, 'aria-label="Task type name"') + bool('types.' + i + '.archived', t.archived, 'Archived'), '<div class="grid-form">' +
       field('System', sel('types.' + i + '.system', systemsList(), t.system, 'data-num')) +
       field('Base hours', num('types.' + i + '.baseHours', t.baseHours, 'min="0.5" step="0.5"')) +
       field('Buffer hours', num('types.' + i + '.bufferHours', t.bufferHours, 'min="0" step="0.5"')) +
@@ -91,7 +104,8 @@ function render() {
 
   const people = panel('People', s.demo ? 'The fictional demo team. Switch to live mode to add your Jira users and set who is who.' : 'Team members are Jira users. Role decides what they can see and change. Skills decide which systems they can cover.',
     (!s.demo ? '<div class="queue-tools"><span class="field-label">Add a Jira user</span>' + finder('new') + '</div>' : '<button data-add="person">＋ Add person</button>') +
-    s.people.map((p, i) => card(text('people.' + i + '.name', p.name, 'aria-label="Name"') + bool('people.' + i + '.archived', p.archived, 'Archived') + (i < saved.people.length ? '<button type="button" data-forget="' + i + '">Remove personal data…</button>' : ''), '<div class="grid-form">' +
+    s.people.map((p, i) => card('people:' + i, p.name, [ROLE[p.access], p.skills.map(k => s.systems[k]).join(', ') || 'no skills', !s.demo && (p.accountId ? 'linked to Jira' : 'not linked to Jira'), (p.days ?? [0, 1, 2, 3, 4]).length < 5 && WEEK.filter((_, k) => (p.days ?? []).includes(k)).join(', '), (p.hoursPerDay ?? s.general.workdayHours) < s.general.workdayHours && p.hoursPerDay + 'h a day', p.access === 'pm' && (p.pmProjects ?? []).length + ' projects', p.archived && 'archived'].filter(Boolean).join(' · '),
+      text('people.' + i + '.name', p.name, 'aria-label="Name"') + bool('people.' + i + '.archived', p.archived, 'Archived') + (i < saved.people.length ? '<button type="button" data-forget="' + i + '">Remove personal data…</button>' : ''), '<div class="grid-form">' +
       field('Job title', text('people.' + i + '.role', p.role)) +
       field('Role in Relay', sel('people.' + i + '.access', [['member', 'Team member'], ['team', 'Team manager'], ['pm', 'Project manager']], p.access, 'data-rerender')) +
       group('Jira user', s.demo ? '<p class="hint">Available in live mode.</p>' : p.accountId ? '<div class="link-row"><span class="linked">✓ Linked</span><button type="button" data-unlink="' + i + '">Unlink</button></div>' : finder(String(i)), s.demo ? '' : p.accountId ? 'Signs in to Relay as this person.' : 'Not linked: cannot open the planner.') +
@@ -106,7 +120,9 @@ function render() {
     s.projects.map((p, i) => {
       const pms = s.people.map((x, j) => [x, j]).filter(([x]) => x.access === 'pm' && !x.archived);
       const covered = [...new Set([...(s.people[p.lead]?.skills ?? []), ...(s.people[p.back]?.skills ?? [])])];
-      return card(text('projects.' + i + '.name', p.name, 'aria-label="Project name"') + bool('projects.' + i + '.archived', p.archived, 'Archived'), '<div class="grid-form">' +
+      const pmNames = pms.filter(([x]) => (x.pmProjects ?? []).includes(i)).map(([x]) => x.name).join(', ');
+      return card('projects:' + i, p.name, [p.jiraKey || (s.demo ? null : 'no Jira key'), 'lead ' + (s.people[p.lead]?.name ?? 'none'), p.back != null && 'backup ' + s.people[p.back]?.name, pmNames && 'PM ' + pmNames, p.due && 'due ' + p.due, p.archived && 'archived'].filter(Boolean).join(' · '),
+        text('projects.' + i + '.name', p.name, 'aria-label="Project name"') + bool('projects.' + i + '.archived', p.archived, 'Archived'), '<div class="grid-form">' +
         field('Jira project key', text('projects.' + i + '.jiraKey', p.jiraKey, 'placeholder="e.g. PILOT"')) +
         field('Due date', '<input type="date" data-path="projects.' + i + '.due" value="' + esc(p.due) + '">') +
         field('Lead', sel('projects.' + i + '.lead', [['', 'None'], ...peopleList()], p.lead, 'data-num data-rerender')) +
@@ -121,7 +137,8 @@ function render() {
   const unmapped = s.demo ? '' : panel('Needs mapping', 'Jira issues from the last refresh that Relay could not plan. Fix a task type rule, a component, or a project contact, then refresh.',
     meta.unmapped.length ? (meta.unmappedTotal > meta.unmapped.length ? '<p class="hint">Showing ' + meta.unmapped.length + ' of ' + meta.unmappedTotal + '.</p>' : '') + table(['Issue', 'Project', 'Reason'], meta.unmapped.map(u => ['<b>' + esc(u.key) + '</b> ' + esc(u.summary), esc(u.project), esc(u.reason)])) : '<p class="empty">Nothing to map.</p>');
 
-  $('view').innerHTML = mode + unmapped + general + estimation + types + systems + people + projects;
+  const sections = { start: start + unmapped, people, projects, types: types + systems, estimation, calendar: general };
+  $('view').innerHTML = '<nav class="section-tabs" aria-label="Settings sections">' + TABS.map(([k, l]) => '<button type="button" class="tab' + (k === tab ? ' active' : '') + '" data-tab="' + k + '" aria-current="' + (k === tab ? 'page' : 'false') + '">' + l + '</button>').join('') + '</nav>' + sections[tab];
 }
 
 /** Live estimate preview so admins can see what the numbers produce before saving. */
@@ -190,7 +207,9 @@ document.addEventListener('change', e => {
 document.addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.hasAttribute('data-dismiss')) $('modal').close();
-  if (b.dataset.add) { s[listOf[b.dataset.add]].push(blank[b.dataset.add]()); markDirty(); render(); }
+  if (b.dataset.tab) { tab = b.dataset.tab; render(); window.scrollTo(0, 0); }
+  if (b.dataset.card) { openCards.has(b.dataset.card) ? openCards.delete(b.dataset.card) : openCards.add(b.dataset.card); render(); }
+  if (b.dataset.add) { const list = listOf[b.dataset.add]; s[list].push(blank[b.dataset.add]()); openCards.add(list + ':' + (s[list].length - 1)); markDirty(); render(); }
   if (b.id === 'switchMode') modal(s.demo ? 'Switch to live Jira data?' : 'Switch back to demo data?', '<p>' + (s.demo ? 'The demo team, projects and plan are removed. Your systems, task types, sizes and factors are kept. Then add your Jira users and connect Jira projects.' : 'The live plan and Relay-only records (timesheets, private time, blockers) are removed and replaced with the demo. Jira itself is not changed.') + '</p><div class="actions"><button data-dismiss>Cancel</button><button class="primary" id="confirmSwitch">Switch</button></div>');
   if (b.id === 'confirmSwitch') { $('modal').close(); await run(() => call('saveSettings', { switchMode: true }), 'Mode switched.'); if (!s.demo && meta.jira) { jiraProjects = (await call('jiraProjects')).projects; render(); } }
   if (b.id === 'refreshNow') {
@@ -214,7 +233,7 @@ document.addEventListener('click', async e => {
     if (!u) return;
     const other = s.people.findIndex(p => p.accountId === u.accountId);
     if (other >= 0 && String(other) !== target) return status(u.name + ' is already linked to ' + s.people[other].name + '.', true);
-    if (target === 'new') s.people.push({ ...blank.person(), name: u.name, accountId: u.accountId });
+    if (target === 'new') { s.people.push({ ...blank.person(), name: u.name, accountId: u.accountId }); openCards.add('people:' + (s.people.length - 1)); }
     else Object.assign(s.people[Number(target)], { accountId: u.accountId }, s.people[Number(target)].name === 'New person' ? { name: u.name } : {});
     search = { target: null, query: '', users: [] }; markDirty(); render();
   }
@@ -233,7 +252,7 @@ document.addEventListener('click', async e => {
   if (b.dataset.unlink !== undefined) { s.people[Number(b.dataset.unlink)].accountId = null; markDirty(); render(); }
   if (b.id === 'jiraAdd') {
     const j = jiraProjects.find(x => x.key === $('jiraPick').value);
-    if (j) { s.projects.push({ ...blank.project(), name: j.name, jiraKey: j.key }); markDirty(); render(); }
+    if (j) { s.projects.push({ ...blank.project(), name: j.name, jiraKey: j.key }); openCards.add('projects:' + (s.projects.length - 1)); markDirty(); render(); }
   }
 });
 async function run(fn, message) {
