@@ -5,7 +5,7 @@ import { multiplier } from './estimate.js';
 export const GENERAL = {
   workdayHours: 8, slotHours: 4, dayStartHour: 8, planStart: '2026-11-30',
   estimatePercentile: 70, bufferPercentile: 90, minSamples: 3, historyMonths: 12,
-  storyPointsField: 'customfield_10016', blockLinkType: 'Blocks'
+  storyPointsField: 'customfield_10016', blockLinkType: 'Blocks', internalIssue: ''
 };
 export const SIZES = [
   { id: 'S', name: 'Small', multiplier: 0.75 },
@@ -38,7 +38,7 @@ export function liveSettings(from) {
     general: { ...(from?.general ?? GENERAL), planStart: monday.toISOString().slice(0, 10) },
     systems: from?.systems ?? [...SYSTEMS], types: from?.types ?? defaultTypes(),
     sizes: from?.sizes ?? SIZES, defaultSize: from?.defaultSize ?? 'M', factors: from?.factors ?? FACTORS,
-    projects: [], people: []
+    holidays: from?.holidays ?? [], projects: [], people: []
   };
 }
 
@@ -54,7 +54,9 @@ export function sampleSettings() {
   const cal = calendar(GENERAL), sizeCycle = ['M', 'L', 'S', 'XL', 'M'];
   return {
     demo: true, general: { ...GENERAL }, systems: [...SYSTEMS], types: defaultTypes(), sizes: SIZES, defaultSize: 'M', factors: FACTORS,
-    people: PEOPLE.map(([name, role, skills]) => ({ name, role, skills, access: 'member', accountId: null, pmProjects: [], archived: false })),
+    holidays: ['2026-12-24', '2026-12-25', '2026-12-31', '2027-01-01'],
+    // Dev works Monday to Thursday, to show part-time planning.
+    people: PEOPLE.map(([name, role, skills], i) => ({ name, role, skills, access: 'member', accountId: null, pmProjects: [], archived: false, days: i === 3 ? [0, 1, 2, 3] : [0, 1, 2, 3, 4], hoursPerDay: 8 })),
     projects: NAMES.map((name, i) => ({
       name, lead: LEADS[i], back: BACKS[i], due: cal.isoOfDay(DUE[i]), jiraKey: '', jql: '', archived: false,
       sizes: Object.fromEntries(SYSTEMS.map((_, s) => [s, sizeCycle[(i + s) % 5]])),
@@ -70,12 +72,15 @@ export function sampleState(settings) {
   settings.projects.forEach((p, i) => {
     const [a, b] = settings.people[p.lead].skills;
     tasks.push(
-      { id: 'a' + i, p: i, s: a, type: a, name: TYPE_NAMES[a], work: d(i % 3 === 1 ? 3 : 2), buffer: d(a === 2 ? 2 : 1), rank: i * 2, after: null, ready: 0, source: 'Sample estimate' },
-      { id: 'b' + i, p: i, s: b, type: b, name: TYPE_NAMES[b], work: d(1 + (i % 2)), buffer: d(b === 2 ? 2 : 1), rank: i * 2 + 1, after: 'a' + i, ready: 0, source: 'Sample estimate' }
+      { id: 'a' + i, p: i, s: a, type: a, name: TYPE_NAMES[a], work: d(i % 3 === 1 ? 3 : 2), buffer: d(a === 2 ? 2 : 1), rank: i * 2, deps: [], ready: 0, source: 'Sample estimate' },
+      { id: 'b' + i, p: i, s: b, type: b, name: TYPE_NAMES[b], work: d(1 + (i % 2)), buffer: d(b === 2 ? 2 : 1), rank: i * 2 + 1, deps: ['a' + i], ready: 0, source: 'Sample estimate' }
     );
   });
   Object.assign(tasks[0], { name: 'Update test system', work: d(1), buffer: d(1) });
   tasks.find(t => t.id === 'a2').started = { who: 2, start: 0 };
+  // Jira assignees in the demo: one agrees with the plan, one differs, to show the warning.
+  tasks.find(t => t.id === 'a0').assignee = { id: null, name: 'Ana Silva' };
+  tasks.find(t => t.id === 'a1').assignee = { id: null, name: 'Ana Silva' };
   tasks.find(t => t.id === 'a3').wait = { who: 3, reason: 'Customer to enable access to the test environment.', shared: true };
   // Fictional finished work so the history-based estimator has something to learn from.
   const completed = [];

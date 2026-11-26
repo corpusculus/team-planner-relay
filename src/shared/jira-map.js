@@ -41,12 +41,12 @@ export function mapIssues(issues, settings, completed, todayIso) {
     const s = systemOf(f, type, settings);
     if (!covers(settings, p, s)) { unmapped.push({ ...base, reason: 'Nobody on ' + base.project + ' covers ' + settings.systems[s] + '.' }); continue; }
     const est = estimate(settings, { type, p, s, labels: f.labels, originalEstimateSec: f.timeoriginalestimate, storyPoints: Number(f[g.storyPointsField]) || 0 }, completed, todayIso);
-    const blocker = (f.issuelinks || []).find(l => l.type?.name?.toLowerCase() === linkType && l.inwardIssue)?.inwardIssue;
+    const blockers = (f.issuelinks || []).filter(l => l.type?.name?.toLowerCase() === linkType && l.inwardIssue).map(l => 'jira-' + l.inwardIssue.id);
     const prefer = f.assignee ? person(f.assignee.accountId) : -1;
     tasks.push({
       id: 'jira-' + issue.id, key: issue.key, name: base.summary || issue.key, p, s, type, labels: f.labels || [],
       work: Math.max(1, toSlots(est.hours, g.slotHours)), buffer: toSlots(est.buffer, g.slotHours), source: est.source,
-      after: blocker ? 'jira-' + blocker.id : null, ready: 0, ...(prefer >= 0 ? { prefer } : {})
+      deps: blockers, ready: 0, assignee: f.assignee ? { id: f.assignee.accountId, name: f.assignee.displayName } : null, ...(prefer >= 0 ? { prefer } : {})
     });
   }
   return { tasks, unmapped };
@@ -84,6 +84,6 @@ export function mergeTasks(state, mapped) {
     if (!isJira || ((old.started || old.history?.length) && old.actual == null)) tasks.push(isJira ? { ...old, gone: true } : old);
   }
   const all = new Set(tasks.map(t => t.id));
-  for (const t of tasks) if (t.after && !all.has(t.after)) t.after = null;
+  for (const t of tasks) t.deps = (t.deps ?? []).filter(id => all.has(id));
   return { ...state, tasks, fixed: state.fixed.filter(f => all.has(f.taskId)) };
 }

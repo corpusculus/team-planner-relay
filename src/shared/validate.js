@@ -47,6 +47,7 @@ export function validateSettings(input, prev) {
     minSamples: num(gi.minSamples, 1, 50, 'Minimum history samples', true),
     historyMonths: num(gi.historyMonths, 1, 60, 'History window', true),
     blockLinkType: str(gi.blockLinkType ?? 'Blocks', 60, 'Dependency link type'),
+    internalIssue: /^([A-Z][A-Z0-9_]*-\d+)?$/.test(String(gi.internalIssue ?? '').trim().toUpperCase()) ? String(gi.internalIssue ?? '').trim().toUpperCase() : fail('Internal work issue must be an issue key like ADMIN-12.'),
     storyPointsField: /^[a-zA-Z0-9_]{0,40}$/.test(gi.storyPointsField ?? '') ? (gi.storyPointsField ?? '') : fail('Story points field must look like customfield_10016.')
   };
   const systems = arr(s.systems, 50, 'Systems').map((x, i) => str(x, 40, 'System ' + (i + 1)));
@@ -74,6 +75,8 @@ export function validateSettings(input, prev) {
     access: ['member', 'team', 'pm'].includes(p.access) ? p.access : fail('Choose a role for ' + p.name + '.'),
     skills: [...new Set(arr(p.skills || [], 50, 'Skills').map(x => idx(x, systems, 'Skill')))],
     accountId: p.accountId ? str(p.accountId, 128, 'Jira account') : null,
+    days: (() => { const d = [...new Set(arr(p.days ?? [0, 1, 2, 3, 4], 5, 'Working days').map(x => Number(x)))].filter(x => Number.isInteger(x) && x >= 0 && x <= 4).sort(); return p.archived || d.length ? d : fail(p.name + ' needs at least one working day.'); })(),
+    hoursPerDay: num(p.hoursPerDay ?? workdayHours, slotHours, workdayHours, p.name + ': hours per day'),
     pmProjects: [...new Set(arr(p.pmProjects || [], 200, 'PM projects').map(x => Number(x)))].filter(x => Number.isInteger(x) && x >= 0 && x < (s.projects?.length ?? 0)),
     archived: !!p.archived
   }));
@@ -97,5 +100,6 @@ export function validateSettings(input, prev) {
     for (const [k, label] of [['systems', 'systems'], ['types', 'task types'], ['people', 'people'], ['projects', 'projects']])
       if ((prev[k]?.length ?? 0) > ({ systems, types, people, projects })[k].length) fail('Entries in ' + label + ' cannot be deleted. Archive them instead.');
   }
-  return { demo, general, systems, types, sizes, defaultSize, factors, people, projects };
+  const holidays = [...new Set(arr(s.holidays ?? [], 300, 'Holidays').map(d => isoDate(d, 'Holiday') || fail('Holiday needs a date.')))].sort();
+  return { demo, general, systems, types, sizes, defaultSize, factors, holidays, people, projects };
 }

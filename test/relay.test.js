@@ -7,7 +7,7 @@ import { validateSettings } from '../src/shared/validate.js';
 import { createService, pickDay } from '../src/service.js';
 
 const TODAY = '2026-11-26';
-const memStore = (init = {}) => { const m = new Map(Object.entries(init)); return { get: async k => structuredClone(m.get(k)), set: async (k, v) => void m.set(k, structuredClone(v)), m }; };
+const memStore = (init = {}) => { const m = new Map(Object.entries(init)); return { get: async k => structuredClone(m.get(k)), set: async (k, v) => void m.set(k, structuredClone(v)), claim: async k => !m.has(k) && !!m.set(k, 1), m }; };
 
 describe('scheduler', () => {
   it('plans the demo portfolio in 4h slots', () => {
@@ -15,7 +15,12 @@ describe('scheduler', () => {
     const plan = M.schedule(state);
     expect(plan.get('a2')).toMatchObject({ who: 2, start: 0 });
     expect(Number.isFinite(plan.get('a3').start)).toBe(false); // waiting
-    for (const t of state.tasks) if (!t.wait && t.after !== 'a3') expect(plan.get(t.id).end - plan.get(t.id).start).toBe(M.remaining(t));
+    for (const t of state.tasks) {
+      const x = plan.get(t.id);
+      if (!Number.isFinite(x.start)) continue; // waiting, or after a waiting task
+      // Planned working slots equal the remaining work; days off inside the span are skipped.
+      expect(Array.from({ length: x.end - x.start }, (_, k) => x.start + k).filter(s => !M.off(x.who, s)).length).toBe(M.remaining(t));
+    }
   });
 
   it('never plans unstarted work before today', () => {
@@ -90,7 +95,7 @@ describe('jira mapping', () => {
       issue('3', { issuetype: { name: 'Bug' } }),
       issue('4', { components: [{ name: 'Controls' }] })
     ], s, [], TODAY);
-    expect(tasks.map(t => [t.id, t.s, t.after, t.prefer])).toEqual([['jira-1', 1, null, 0], ['jira-2', 2, 'jira-1', undefined]]);
+    expect(tasks.map(t => [t.id, t.s, t.deps, t.prefer])).toEqual([['jira-1', 1, [], 0], ['jira-2', 2, ['jira-1'], undefined]]);
     expect(unmapped.map(u => u.key)).toEqual(['PIL-3', 'PIL-4']);
   });
 
@@ -189,7 +194,7 @@ describe('service', () => {
     await svc.handle('apply', ctx('ana'), { op });
     const ws = await svc.handle('apply', ctx('ana'), { op }); // retried request
     expect((await store.get('logs:2026-11')).map(e => e.id)).toEqual(['entry-0001']);
-    expect((await store.get('plan')).rev).toBe(3); // a preview made before this is still valid
+    expect((await store.get('plan')).rev).toBe(4); // only the first entry of a new month touches the plan (to remember the month)
     expect(ws.state.logs).toHaveLength(1);
     expect((await svc.handle('apply', ctx('max'), { op: { kind: 'log', entry: { ...op.entry, minutes: 5 } } })).error).toMatch(/your own/);
     await svc.handle('apply', ctx('ana'), { op: { kind: 'log', entry: { ...op.entry, date: '2026-12-01', prevDate: '2026-11-27' } } });
@@ -208,6 +213,86 @@ describe('service', () => {
     expect((await store.get('plan')).completed.map(c => c.id)).toEqual(['jira-100', 'jira-101']);
   });
 
+  /** Live store with project 0 on Jira key PA and task t0 = issue PA-1 (id 100). */
+  const jiraStore = async () => {
+    const store = liveStore(), s = await store.get('settings'), plan = await store.get('plan');
+    s.projects[0].jiraKey = 'PA';
+    s.people[0].accountId = 'ana';
+    plan.tasks[0] = { ...plan.tasks[0], id: 'jira-100', key: 'PA-1' };
+    await store.set('settings', s); await store.set('plan', plan);
+    return store;
+  };
+
+  it('lets only one of two saves from the same revision through', async () => {
+    const store = liveStore(), svc = createService({ store, jira: null, today: () => TODAY });
+    await store.claim('plan-rev:4'); // another save from revision 3 got there first
+    const res = await svc.handle('apply', ctx('max'), { op: { kind: 'note', p: 0, text: 'hi' } });
+    expect(res.code).toBe('stale');
+    expect((await store.get('plan')).notes[0]).toBeUndefined();
+  });
+
+  it('records who changed what, and shows it to the team manager only', async () => {
+    const svc = createService({ store: liveStore(), jira: null, today: () => TODAY });
+    const ws = await svc.handle('apply', ctx('max'), { op: { kind: 'note', p: 0, text: 'Kick-off moved' } });
+    expect(ws.state.changes[0]).toMatchObject({ by: 'Max Lead', what: 'Shared project note saved.' });
+    expect((await svc.handle('getWorkspace', ctx('ana'), {})).state.changes).toEqual([]);
+  });
+
+  it('reads the timesheet from Jira work logs of team members', async () => {
+    const store = await jiraStore();
+    const jira = {
+      search: async ({ jql }) => (expect(jql).toContain('worklogDate >= "2026-11-23"'), { issues: [{ id: '100', key: 'PA-1', fields: { project: { key: 'PA' }, summary: 'Secret 0' } }], isLast: true }),
+      worklogs: async () => [
+        { id: '9', author: { accountId: 'ana' }, started: '2026-11-24T09:00:00.000+0100', timeSpentSeconds: 5400, comment: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Checked logs' }] }] } },
+        { id: '10', author: { accountId: 'someone-else' }, started: '2026-11-24T09:00:00.000+0100', timeSpentSeconds: 600 }
+      ]
+    };
+    const ws = await createService({ store, jira, today: () => TODAY }).handle('getWorkspace', ctx('ana'), {});
+    expect(ws.timeInJira).toBe(true);
+    expect(ws.state.logs).toEqual([{ id: '9', issue: '100', who: 0, date: '2026-11-24', minutes: 90, note: 'Checked logs', task: 'jira-100', p: 0, label: 'PA-1 · Secret 0' }]);
+  });
+
+  it('writes time as Jira work logs, moving them between issues when needed', async () => {
+    const store = await jiraStore(), calls = [];
+    const jira = { search: async () => ({ issues: [], isLast: true }), worklogs: async () => [],
+      addWorklog: async (...a) => calls.push(['add', ...a]), updateWorklog: async (...a) => calls.push(['update', ...a]), deleteWorklog: async (...a) => calls.push(['delete', ...a]) };
+    const svc = createService({ store, jira, today: () => TODAY });
+    await svc.handle('apply', ctx('ana'), { op: { kind: 'log', entry: { task: 'jira-100', date: '2026-11-25', minutes: 60, note: 'Done' } } });
+    expect(calls[0]).toEqual(['add', 'PA-1', { timeSpentSeconds: 3600, started: '2026-11-25T12:00:00.000+0000', comment: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Done' }] }] } }]);
+    await svc.handle('apply', ctx('ana'), { op: { kind: 'log', entry: { id: '9', issue: '100', task: 'jira-100', prevTask: 'jira-100', date: '2026-11-25', minutes: 30 } } });
+    expect(calls[1].slice(0, 3)).toEqual(['update', '100', '9']);
+    expect((await svc.handle('apply', ctx('ana'), { op: { kind: 'log', entry: { task: 't1', date: '2026-11-25', minutes: 30 } } })).error).toMatch(/Jira issues/);
+    expect((await svc.handle('apply', ctx('ana'), { op: { kind: 'log', entry: { task: '', date: '2026-11-25', minutes: 30 } } })).error).toMatch(/internal-work issue/);
+  });
+
+  it('refreshes from Jira every hour in live mode only', async () => {
+    expect(await createService({ store: memStore(), jira: {}, today: () => TODAY }).autoRefresh()).toEqual({ skipped: true }); // demo
+    const store = await jiraStore();
+    const jira = { search: async () => ({ issues: [{ id: '100', key: 'PA-1', fields: { project: { key: 'PA' }, summary: 'Renamed', issuetype: { name: 'Task' }, components: [{ name: 'Integration' }] } }], isLast: true }) };
+    expect(await createService({ store, jira, today: () => TODAY }).autoRefresh()).toEqual({ refreshed: true });
+    const plan = await store.get('plan');
+    expect(plan.tasks.find(t => t.id === 'jira-100').name).toBe('Renamed');
+    expect(plan.changes[0].by).toBe('Automatic refresh');
+  });
+
+  it('removes the personal data of someone who left', async () => {
+    const store = liveStore(), svc = createService({ store, jira: null, today: () => TODAY });
+    expect((await svc.handle('forgetPerson', ctx('max'), { index: 0 })).error).toMatch(/administrators/);
+    const res = await svc.handle('forgetPerson', ctx('max', true), { index: 0 });
+    expect(res.settings.people[0]).toMatchObject({ name: 'Former member 1', accountId: null, archived: true });
+    expect((await store.get('plan')).privateTime).toEqual([]);
+  });
+
+  it('sets the Jira assignee to the planned owner', async () => {
+    const store = await jiraStore(), calls = [];
+    const jira = { search: async () => ({ issues: [], isLast: true }), worklogs: async () => [], updateIssue: async (...a) => calls.push(a) };
+    const svc = createService({ store, jira, today: () => TODAY });
+    expect((await svc.handle('pushToJira', ctx('ana'), { taskId: 'jira-100', field: 'assignee' })).error).toMatch(/team manager/);
+    await svc.handle('pushToJira', ctx('max'), { taskId: 'jira-100', field: 'assignee' });
+    expect(calls).toEqual([['PA-1', { assignee: { accountId: 'ana' } }]]);
+    expect((await store.get('plan')).tasks[0].assignee).toEqual({ id: 'ana', name: 'Ana Silva' });
+  });
+
   it('uses the caller\'s local date only within a day of UTC', () => {
     expect(pickDay('2026-11-25', '2026-11-26')).toBe('2026-11-25');
     expect(pickDay('2026-11-20', '2026-11-26')).toBe('2026-11-26');
@@ -220,5 +305,29 @@ describe('service', () => {
     const res = await svc.handle('saveSettings', ctx('vera', true), { switchMode: true });
     expect(res.settings.people).toEqual([expect.objectContaining({ name: 'Vera Admin', accountId: 'vera', access: 'team' })]);
     expect((await svc.handle('getWorkspace', ctx('vera'), {})).notMember).toBeUndefined();
+  });
+});
+
+describe('availability', () => {
+  it('skips holidays and days a part-timer does not work', () => {
+    const settings = sampleSettings(), M = createModel(settings, TODAY), plan = M.schedule(sampleState(settings));
+    const christmas = M.cal.dayIndex('2026-12-25') * M.spd, dev = 3;
+    expect(M.off(0, christmas)).toBe(true);
+    expect(M.off(dev, 4 * M.spd)).toBe(true); // Friday
+    for (const x of plan.values()) if (Number.isFinite(x.start)) expect(M.off(x.who, x.start)).toBe(false);
+    expect(plan.get('a8')).toMatchObject({ who: dev, start: 6, end: 14 }); // Thu, then Mon — Dev's Friday is skipped
+  });
+
+  it('plans after every prerequisite', () => {
+    const settings = sampleSettings(), M = createModel(settings, TODAY), state = sampleState(settings);
+    state.tasks.find(t => t.id === 'b0').deps = ['a0', 'a1'];
+    const plan = M.schedule(state);
+    expect(plan.get('b0').start).toBeGreaterThanOrEqual(Math.max(plan.get('a0').end, plan.get('a1').end));
+  });
+
+  it('turns an old single prerequisite into a list', () => {
+    const settings = sampleSettings();
+    const n = normalize({ ...sampleState(settings), tasks: [{ id: 'x', after: 'y' }] }, settings);
+    expect(n.tasks[0]).toEqual({ id: 'x', deps: ['y'] });
   });
 });

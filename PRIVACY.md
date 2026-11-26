@@ -1,6 +1,6 @@
 # Team Planner Relay — Privacy Policy
 
-Last updated: 26 November 2026
+Last updated: 27 November 2026
 
 Team Planner Relay ("the app") is a free, open-source (MIT) planning app for Jira Cloud, built and run on Atlassian Forge.
 It is made by Vedran Vukosav as a private individual ("the developer").
@@ -14,27 +14,28 @@ It is made by Vedran Vukosav as a private individual ("the developer").
 
 ## What the app reads
 
-When a team manager presses *Refresh*, the app reads Jira issues from the projects an administrator connected, using that person's
-Jira access. It reads issue key, summary, type, components, labels, assignee, original estimate, story points, issue links,
-time spent and resolution date. When an administrator adds team members, the app searches Jira users by name.
+The app reads Jira issues from the projects an administrator connected: when a team manager presses *Refresh* (with that
+person's Jira access) and once an hour automatically (with the app's access). It reads issue key, summary, type, components,
+labels, assignee, original estimate, story points, issue links, time spent and resolution date. For timesheets it reads the
+work logs team members logged on those issues. When an administrator adds team members, the app searches Jira users by name.
 
 ## What the app stores
 
 In Forge storage, inside your installation:
 - **Team settings:** people's display names, Jira account IDs, job titles, roles in the app and skills; projects, task types and estimation rules.
 - **Planning data:** tasks (including Jira issue keys and summaries), estimates, assignments, blockers, agreed dates, private-time labels, absences and shared project notes.
-- **Timesheets:** date, duration, task and an optional personal note for each time entry.
 - **Estimation history:** hours spent on finished tasks, with no personal details.
 
-The app never writes to Jira.
+Timesheets are not stored by the app: time is logged as Jira work logs, which Jira stores and controls. The app only writes to Jira
+when a person logs, edits or deletes their own time, or a team manager sets an issue's assignee or due date.
 
 ## Who can see it
 
 Access is decided by your site's administrators in the app's settings and enforced by the app:
 - Team members see their own assignments and timesheets.
-- Team managers see the team plan and timesheet totals, but not other people's personal timesheet notes.
+- Team managers see the team plan and the team's logged time, but not work log comments in Relay.
 - Project managers see their projects' outlook, and only the issue titles Jira lets them browse.
-- Private-time labels and personal notes are visible only to their owner.
+- Private-time labels are visible only to their owner. Work log comments are visible in Jira to anyone who can see the issue.
 
 ## Logs
 
@@ -44,8 +45,8 @@ and the app does not deliberately put planning data in them. Atlassian's rules d
 ## Keeping and deleting data
 
 Data stays until an administrator removes it in the app or uninstalls the app. After uninstalling, Atlassian deletes the app's stored
-data according to Atlassian's Forge data retention policy. People can delete their own timesheet entries at any time; an administrator
-can archive a person in the app's settings so they no longer appear in the plan.
+data according to Atlassian's Forge data retention policy. When someone leaves, an administrator can use *Remove personal data* in the app's
+settings: it deletes their name, Jira link, private time and absences. Their Jira work logs are managed in Jira.
 
 ## Atlassian
 

@@ -3,7 +3,8 @@ import { createService } from '../../src/service.js';
 
 const store = {
   get: async key => JSON.parse(localStorage.getItem('relay.local.' + key) ?? 'null') ?? undefined,
-  set: async (key, value) => localStorage.setItem('relay.local.' + key, JSON.stringify(value))
+  set: async (key, value) => localStorage.setItem('relay.local.' + key, JSON.stringify(value)),
+  claim: async key => (localStorage.getItem('relay.local.' + key) ? false : (localStorage.setItem('relay.local.' + key, '1'), true))
 };
 const service = createService({ store, jira: null });
 const ctx = { accountId: 'local-preview', isAdmin: async () => true };

@@ -13,14 +13,20 @@ It was written by a team member as a private, free contribution under the MIT li
 
 | Permission | Why |
 |---|---|
-| `read:jira-work` | Read issues of the projects you connect, as the signed-in user, and check which issues a PM may see |
+| `read:jira-work` | Read issues and work logs of the projects you connect, and check which issues a PM may see |
+| `write:jira-work` | Log time as Jira work logs; when a team manager asks, set an issue's assignee or due date |
 | `read:jira-user` | Find people when adding team members; check that the caller is a Jira admin for the settings page |
 | `storage:app` | Store planning data (assignments, estimates, timesheets) in Forge storage inside this installation |
 
 The app is eligible for Atlassian's *Runs on Atlassian* program: it runs and stores data only on Atlassian's platform, with no outside servers.
 
-Relay **never writes to Jira**: no issue edits, transitions, assignments or worklogs. It reads issues using the access of the
-person who presses *Refresh*, and Jira's own permissions and issue security apply.
+**What Relay changes in Jira**, and only when someone clicks for it:
+- *Log time* adds, edits or deletes the person's own Jira work log. Time is logged only in Jira.
+- *Set Jira assignee* and *Set Jira due date* (team manager only) update that one issue.
+It never transitions issues or changes anything else. Jira's own permissions apply to every change.
+
+**Reading:** a team manager's *Refresh* reads issues with their own Jira access. An hourly automatic refresh reads the connected
+projects with the app's access, so the plan stays current. Project managers only see issue titles Jira lets them browse.
 
 ## Who sees what
 
@@ -67,5 +73,5 @@ Jira settings → Apps → Manage apps → Team Planner Relay → Uninstall. Not
 
 ## Known limits (first version)
 
-Read-only on Jira; one prerequisite per task; Monday–Friday workdays without holidays; history import uses the
-1,000 most recently resolved issues; built for one team (up to about 30 people).
+Monday–Friday workweek (with public holidays and part-time days); history import uses the 1,000 most recently resolved
+issues; refresh handles up to 5,000 open issues; built for one team (up to about 30 people).

@@ -15,17 +15,19 @@ export function calendar(general) {
     return wd > 4 ? (up ? (w + 1) * 5 : w * 5 + 4) : w * 5 + wd;
   };
   const dateOf = d => new Date(epoch + (Math.floor(d / 5) * 7 + ((d % 5) + 5) % 5) * DAY_MS);
-  return { spd, epoch, dayIndex, dateOf, isoOfDay: d => dateOf(d).toISOString().slice(0, 10) };
+  const isWeekday = iso => new Date(String(iso).slice(0, 10) + 'T00:00:00Z').getUTCDay() % 6 !== 0;
+  return { spd, epoch, dayIndex, dateOf, isWeekday, isoOfDay: d => dateOf(d).toISOString().slice(0, 10) };
 }
 
 export function emptyState(settings) {
-  return { rev: 0, unit: unitOf(settings), tasks: [], leave: [], privateTime: [], fixed: [], notes: {}, logs: [], logMonths: [], completed: [], unmapped: [], ops: [] };
+  return { rev: 0, unit: unitOf(settings), tasks: [], leave: [], privateTime: [], fixed: [], notes: {}, logs: [], logMonths: [], completed: [], unmapped: [], ops: [], changes: [] };
 }
 const unitOf = settings => ({ slotHours: settings.general.slotHours, workdayHours: settings.general.workdayHours });
 
 /** Fill missing fields and convert slot positions/durations if the slot size or workday length changed. */
 export function normalize(state, settings) {
   const s = { ...emptyState(settings), ...structuredClone(state) };
+  for (const t of s.tasks) if (!Array.isArray(t.deps)) { t.deps = t.after ? [t.after] : []; delete t.after; }
   const from = s.unit, to = unitOf(settings);
   if (from.slotHours !== to.slotHours || from.workdayHours !== to.workdayHours) {
     const fromSpd = from.workdayHours / from.slotHours, toSpd = to.workdayHours / to.slotHours;
@@ -81,6 +83,22 @@ export function createModel(settings, todayIso) {
     systems: [...new Set([...skillsOf(p.lead), ...skillsOf(p.back)])]
   }));
   const now = Math.max(0, cal.dayIndex(todayIso, true) * spd);
+  const holidays = new Set((settings.holidays ?? []).filter(cal.isWeekday).map(iso => cal.dayIndex(iso)));
+  const isHoliday = slot => holidays.has(Math.floor(slot / spd));
+  /** True when person w does not work in this slot: public holiday, a weekday they don't work, or past their hours that day. */
+  function off(w, slot) {
+    const d = Math.floor(slot / spd), p = people[w];
+    return holidays.has(d) || !(p?.days ?? [0, 1, 2, 3, 4]).includes(((d % 5) + 5) % 5) || slot - d * spd >= Math.ceil((p?.hoursPerDay ?? g.workdayHours) / slotH);
+  }
+  /** The first n slots person w works, from `start` on. */
+  function take(w, start, n) {
+    const out = [];
+    for (let s = start; out.length < n; s++) {
+      if (s - start > 50 * weekSlots) throw new UserError(who(w).short + ' has no working time. Check their working days and hours in Relay settings.');
+      if (!off(w, s)) out.push(s);
+    }
+    return out;
+  }
 
   const fmt = (s, opts = { day: 'numeric', month: 'short' }) =>
     Number.isFinite(s) ? cal.dateOf(Math.floor(s / spd)).toLocaleDateString('en-GB', { ...opts, timeZone: 'UTC' }) : 'Pending';
@@ -124,12 +142,12 @@ export function createModel(settings, todayIso) {
       availableFrom[h.who] = Math.max(availableFrom[h.who], h.end);
     }
     for (const t of state.tasks.filter(t => t.started)) {
-      const { who: w, start } = t.started, end = start + remaining(t);
-      for (let d = start; d < end; d++) {
+      const { who: w, start } = t.started, work = take(w, start, remaining(t)), end = work.at(-1) + 1;
+      for (const d of work) {
         if (occupied[w].has(d)) throw new UserError(who(w).short + ' has a conflict on ' + fmt(d) + ' with ' + t.name + '. Check the recorded work or availability.');
         occupied[w].add(d);
       }
-      reservations.set(t.id, { who: w, start });
+      reservations.set(t.id, { who: w, start, end });
       availableFrom[w] = Math.max(availableFrom[w], end);
     }
     for (const fixed of state.fixed) {
@@ -145,19 +163,19 @@ export function createModel(settings, todayIso) {
       }
       const contacts = eligible(task);
       if (contacts.includes(fixed.preferred)) contacts.sort((a, b) => Number(b === fixed.preferred) - Number(a === fixed.preferred));
-      const days = Array.from({ length: duration(task) }, (_, i) => fixed.start + i);
-      const w = contacts.find(c => fixed.start >= availableFrom[c] && days.every(d => !occupied[c].has(d)));
+      const w = contacts.find(c => fixed.start >= availableFrom[c] && !off(c, fixed.start) && take(c, fixed.start, duration(task)).every(d => !occupied[c].has(d)));
       if (w === undefined) throw new UserError('No qualified contact is available for ' + projects[task.p].name + ' · ' + task.name + ' on its fixed start date, ' + fmt(fixed.start) + '.');
+      const days = take(w, fixed.start, duration(task));
       for (const day of days) occupied[w].add(day);
-      reservations.set(task.id, { who: w, start: fixed.start });
+      reservations.set(task.id, { who: w, start: fixed.start, end: days.at(-1) + 1 });
     }
-    const ids = new Set(state.tasks.map(t => t.id)), dep = t => (t.after && ids.has(t.after) ? t.after : null);
+    const ids = new Set(state.tasks.map(t => t.id)), deps = t => (t.deps ?? []).filter(id => ids.has(id));
     const queue = state.tasks.slice().sort((a, b) => a.rank - b.rank);
     while (queue.length) {
-      const i = queue.findIndex(t => !dep(t) || slots.has(dep(t)));
+      const i = queue.findIndex(t => deps(t).every(id => slots.has(id)));
       if (i < 0) throw new UserError('These tasks depend on each other in a loop: ' + queue.map(t => t.name).slice(0, 3).join(', ') + '.');
       const [t] = queue.splice(i, 1);
-      const prereq = Math.max(t.ready, dep(t) ? slots.get(dep(t)).end : 0);
+      const prereq = Math.max(t.ready, ...deps(t).map(id => slots.get(id).end));
       if (t.wait || !Number.isFinite(prereq)) {
         slots.set(t.id, { who: t.wait?.who ?? reservations.get(t.id)?.who ?? eligible(t)[0], start: Infinity, end: Infinity });
         continue;
@@ -165,19 +183,20 @@ export function createModel(settings, todayIso) {
       const hold = reservations.get(t.id);
       if (hold) {
         if (prereq > hold.start) throw new UserError('The prerequisite for ' + projects[t.p].name + ' would finish after its fixed start date on ' + fmt(hold.start) + '. Adjust the proposed change.');
-        slots.set(t.id, { who: hold.who, start: hold.start, end: hold.start + remaining(t) });
+        slots.set(t.id, { who: hold.who, start: hold.start, end: hold.end });
         continue;
       }
       const ready = Math.max(prereq, now);
       let best = null;
       for (const w of eligible(t)) {
-        let start = Math.max(ready, availableFrom[w]);
-        while (Array.from({ length: remaining(t) }, (_, k) => occupied[w].has(start + k)).some(Boolean)) start++;
-        if (!best || start < best.start) best = { who: w, start, end: start + remaining(t) };
+        let work = take(w, Math.max(ready, availableFrom[w]), remaining(t)), clash;
+        while ((clash = work.find(d => occupied[w].has(d))) !== undefined) work = take(w, clash + 1, remaining(t));
+        // Earliest finish wins, so a part-time contact does not get work a full-time one would finish sooner.
+        if (!best || work.at(-1) < best.work.at(-1)) best = { who: w, work };
       }
       if (!best) throw new UserError('No qualified contact for ' + (projects[t.p]?.name ?? 'an archived project') + ' · ' + t.name + '. Check project contacts and skills in Relay settings.');
-      slots.set(t.id, best);
-      for (let d = best.start; d < best.end; d++) occupied[best.who].add(d);
+      slots.set(t.id, { who: best.who, start: best.work[0], end: best.work.at(-1) + 1 });
+      for (const d of best.work) occupied[best.who].add(d);
     }
     return slots;
   }
@@ -187,7 +206,7 @@ export function createModel(settings, todayIso) {
   function startBlocker(state, plan, t) {
     const x = plan.get(t.id);
     if (t.wait) return 'Resolve the blocker to return this task to the queue.';
-    if (t.after && state.tasks.some(a => a.id === t.after && a.actual == null)) return 'Complete the prerequisite first.';
+    if (state.tasks.some(a => (t.deps ?? []).includes(a.id) && a.actual == null)) return 'Complete the prerequisites first.';
     if (state.tasks.some(a => a.id !== t.id && plan.get(a.id).who === x.who && a.actual == null && (a.started || plan.get(a.id).start < x.start))) return 'An earlier assignment for ' + who(x.who).short + ' is still open.';
     return '';
   }
@@ -270,7 +289,7 @@ export function createModel(settings, todayIso) {
         id: 'u' + crypto.randomUUID().slice(0, 8), p, s, type, name,
         work: slotsOf(v.hours, 1), buffer: slotsOf(v.buffer), source: text(v.source, 120) || 'Entered in Relay',
         rank: v.kind === 'urgent' ? (ranks.length ? Math.min(...ranks) : 0) - 1 : (ranks.length ? Math.max(...ranks) : 0) + 1,
-        after: null, ready: slotIdx(v.start)
+        deps: [], ready: slotIdx(v.start)
       };
       next.tasks.push(t);
       summary = projects[p].name + ' · ' + name;
@@ -302,12 +321,12 @@ export function createModel(settings, todayIso) {
     return { next, slots, moved, summary };
   }
 
-  /** Apply any change to the plan. Returns { next, message }; throws UserError when invalid. */
+  /** Apply any change to the plan. Returns { next, message, summary }; throws UserError when invalid. */
   function applyOp(state, op, me) {
     const plan = schedule(state);
-    let next = structuredClone(state), message;
+    let next = structuredClone(state), message, summary;
     if (op.kind === 'draft') {
-      next = makeDraft(state, plan, op.v || {}).next;
+      ({ next, summary } = makeDraft(state, plan, op.v || {}));
       message = 'Change applied. The schedule and milestone forecasts are updated.';
     } else if (op.kind === 'start') {
       const t = state.tasks.find(t => t.id === op.taskId);
@@ -325,12 +344,12 @@ export function createModel(settings, todayIso) {
       message = 'Shared project note saved.';
     } else throw new UserError('Unknown change.');
     schedule(next);
-    return { next, message };
+    return { next, message, summary: summary ?? message };
   }
 
   return {
     settings, people, projects, systems, types, cal, spd, slotH, weekSlots, now,
     fmt, span, slotLabel, hrs, daysLate, dueText, who,
-    effectiveWork, duration, spent, remaining, statusOf, eligible, schedule, finish, startBlocker, makeDraft, applyOp
+    effectiveWork, duration, spent, remaining, statusOf, eligible, schedule, finish, startBlocker, makeDraft, applyOp, off, isHoliday, take
   };
 }

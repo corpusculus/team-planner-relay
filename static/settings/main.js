@@ -53,6 +53,8 @@ function render() {
     field('Minimum slot (hours)', num('general.slotHours', g.slotHours, 'min="1" step="1"'), 'Must divide the workday. 4h = at most 2 tasks a day.') +
     field('Workday starts at', num('general.dayStartHour', g.dayStartHour, 'min="0" max="23" step="1"'), 'Used for slot labels only.') +
     field('Planning start (a Monday)', '<input type="date" data-path="general.planStart" value="' + esc(g.planStart) + '">', 'Week 1 of the calendar. Workdays are Monday–Friday.') +
+    field('Internal work issue', text('general.internalIssue', g.internalIssue ?? '', 'placeholder="e.g. ADMIN-12"'), 'Jira issue where time for non-project work is logged.') +
+    group('Public holidays', '<div class="link-row"><input type="date" id="holidayNew" aria-label="Holiday date"><button type="button" id="holidayAdd">Add holiday</button></div><div class="checks">' + (s.holidays ?? []).map((d, i) => '<span class="chip">' + esc(d) + '<button type="button" data-rm-holiday="' + i + '" aria-label="Remove ' + esc(d) + '">×</button></span>').join('') + '</div>', 'Nobody is planned on these days.', 'full') +
     '</div>');
 
   const estimation = panel('Estimation', 'How Relay sizes a task. History wins when there is enough of it; otherwise the type default is scaled by system size and complexity.',
@@ -89,10 +91,12 @@ function render() {
 
   const people = panel('People', s.demo ? 'The fictional demo team. Switch to live mode to add your Jira users and set who is who.' : 'Team members are Jira users. Role decides what they can see and change. Skills decide which systems they can cover.',
     (!s.demo ? '<div class="queue-tools"><span class="field-label">Add a Jira user</span>' + finder('new') + '</div>' : '<button data-add="person">＋ Add person</button>') +
-    s.people.map((p, i) => card(text('people.' + i + '.name', p.name, 'aria-label="Name"') + bool('people.' + i + '.archived', p.archived, 'Archived'), '<div class="grid-form">' +
+    s.people.map((p, i) => card(text('people.' + i + '.name', p.name, 'aria-label="Name"') + bool('people.' + i + '.archived', p.archived, 'Archived') + (i < saved.people.length ? '<button type="button" data-forget="' + i + '">Remove personal data…</button>' : ''), '<div class="grid-form">' +
       field('Job title', text('people.' + i + '.role', p.role)) +
       field('Role in Relay', sel('people.' + i + '.access', [['member', 'Team member'], ['team', 'Team manager'], ['pm', 'Project manager']], p.access, 'data-rerender')) +
       group('Jira user', s.demo ? '<p class="hint">Available in live mode.</p>' : p.accountId ? '<div class="link-row"><span class="linked">✓ Linked</span><button type="button" data-unlink="' + i + '">Unlink</button></div>' : finder(String(i)), s.demo ? '' : p.accountId ? 'Signs in to Relay as this person.' : 'Not linked: cannot open the planner.') +
+      field('Hours per day', num('people.' + i + '.hoursPerDay', p.hoursPerDay ?? s.general.workdayHours, 'min="' + s.general.slotHours + '" max="' + s.general.workdayHours + '" step="' + s.general.slotHours + '"'), 'Part-time: fewer hours a day.') +
+      group('Works on', many('people.' + i + '.days', [[0, 'Mon'], [1, 'Tue'], [2, 'Wed'], [3, 'Thu'], [4, 'Fri']], p.days ?? [0, 1, 2, 3, 4])) +
       group('Skills', many('people.' + i + '.skills', systemsList(), p.skills), '', 'full') +
       (p.access === 'pm' ? group('Projects they manage', many('people.' + i + '.pmProjects', s.projects.map((x, j) => [j, x.name]), p.pmProjects), '', 'full') : '') +
       '</div>', p.archived)).join(''));
@@ -151,7 +155,7 @@ const blank = {
   factor: () => ({ id: 'f' + crypto.randomUUID().slice(0, 8), name: 'New factor', multiplier: 1.1, label: '' }),
   system: () => 'New system',
   type: () => ({ name: 'New task type', system: 0, baseHours: 8, bufferHours: 4, source: 'relay', hoursPerPoint: 4, issueTypes: '', components: '', labels: '', archived: false }),
-  person: () => ({ name: 'New person', role: '', access: 'member', skills: [], accountId: null, pmProjects: [], archived: false }),
+  person: () => ({ name: 'New person', role: '', access: 'member', skills: [], accountId: null, pmProjects: [], archived: false, days: [0, 1, 2, 3, 4], hoursPerDay: s.general.workdayHours }),
   project: () => ({ name: 'New project', jiraKey: '', jql: '', due: '', lead: null, back: null, sizes: {}, factors: [], archived: false })
 };
 const listOf = { size: 'sizes', factor: 'factors', system: 'systems', type: 'types', person: 'people', project: 'projects' };
@@ -207,6 +211,18 @@ document.addEventListener('click', async e => {
     else Object.assign(s.people[Number(target)], { accountId: u.accountId }, s.people[Number(target)].name === 'New person' ? { name: u.name } : {});
     search = { target: null, query: '', users: [] }; markDirty(); render();
   }
+  if (b.id === 'holidayAdd') {
+    const d = $('holidayNew').value;
+    if (!d) return status('Choose a date first.', true);
+    s.holidays = [...new Set([...(s.holidays ?? []), d])].sort(); markDirty(); render();
+  }
+  if (b.dataset.rmHoliday !== undefined) { s.holidays.splice(Number(b.dataset.rmHoliday), 1); markDirty(); render(); }
+  if (b.dataset.forget !== undefined) {
+    if (dirty) return status('Save or discard your changes first.', true);
+    const i = Number(b.dataset.forget);
+    modal('Remove ' + s.people[i].name + '’s personal data?', '<p>For someone who has left. Their name, Jira link, private time and absences are removed and they are archived. Work already recorded in the plan stays, without their name.' + (meta.jira ? ' Their Jira work logs stay in Jira; remove those in Jira if needed.' : '') + '</p><p>This cannot be undone.</p><div class="actions"><button data-dismiss>Cancel</button><button class="primary" data-forget-confirm="' + i + '">Remove personal data</button></div>');
+  }
+  if (b.dataset.forgetConfirm !== undefined) { $('modal').close(); await run(() => call('forgetPerson', { index: Number(b.dataset.forgetConfirm) }), 'Personal data removed.'); }
   if (b.dataset.unlink !== undefined) { s.people[Number(b.dataset.unlink)].accountId = null; markDirty(); render(); }
   if (b.id === 'jiraAdd') {
     const j = jiraProjects.find(x => x.key === $('jiraPick').value);

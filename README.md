@@ -49,8 +49,9 @@ MIT, free of charge. See [LICENSE](LICENSE).
 
 ## Known limits (v1)
 
-- Read-only on Jira: no assignment or status write-back, no worklog sync.
-- One prerequisite per task (first Jira "is blocked by" link).
-- Plan and timesheets live in one storage key (~240 KB limit) and writes are not atomic. Fine for one team.
+- Time is logged only in Jira (work logs). Reading a week costs one Jira request per issue with time logged that week.
+- Writes back to Jira only on request: work logs, assignee, due date. No status transitions.
+- Hourly automatic refresh uses the app's own Jira access; manual refresh uses the team manager's.
+- Monday–Friday workweek, with public holidays and per-person working days and hours.
 - People, projects, systems and task types are archived, not deleted (the plan refers to them by position).
-- Workdays are fixed to Monday–Friday; no holiday calendar.
+- The plan lives in one storage key (~240 KB); saves from the same revision are guarded so only one wins.

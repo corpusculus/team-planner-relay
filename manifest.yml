@@ -13,9 +13,15 @@ modules:
       resource: settings
       resolver:
         function: resolver
+  scheduledTrigger:
+    - key: relay-auto-refresh
+      function: auto-refresh
+      interval: hour
   function:
     - key: resolver
       handler: index.handler
+    - key: auto-refresh
+      handler: index.autoRefresh
 resources:
   - key: planner
     path: dist/planner
@@ -26,6 +32,7 @@ resources:
 permissions:
   scopes:
     - read:jira-work
+    - write:jira-work
     - read:jira-user
     - storage:app
   content:
