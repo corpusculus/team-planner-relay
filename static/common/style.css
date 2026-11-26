@@ -73,6 +73,8 @@ main{padding-bottom:60px}
 /* No text links: actions and item names that open something are buttons. */
 .link,.project{background:#fff;border:1px solid var(--line);border-radius:7px;padding:6px 12px;min-height:var(--control-h);min-width:var(--button-min);color:var(--ink);font-weight:610;display:inline-flex;align-items:center;gap:8px;text-align:left;white-space:normal}
 .link:hover,.project:hover{border-color:#81958c}
+/* In tables, item buttons fill their column so every button in a column has the same width. */
+.data td>.link,.data td>.project{width:100%}
 .dot{width:9px;height:9px;display:inline-block;background:var(--accent);border-radius:3px;flex-shrink:0}
 .status{font-size:12px;color:#355e4b}
 .late{color:#964222;font-weight:650}
@@ -267,7 +269,7 @@ textarea{width:100%;min-width:0;font:inherit;border:1px solid #c7d1cb;border-rad
   .data.stack td{border:0;padding:4px 0;display:grid;grid-template-columns:110px 1fr;align-items:center;gap:10px}
   .data.stack td::before{content:attr(data-label);font:11px var(--mono);text-transform:uppercase;color:var(--muted)}
   .data.stack td:empty::before{content:none}
-  .data.stack td>input[type=radio],.data.stack .link{justify-self:start;margin:0}
+  .data.stack td>input[type=radio]{justify-self:start;margin:0}
   /* Wide time grids still scroll sideways; keep the person column visible. */
   .load-table td:first-child,.load-table th:first-child{position:sticky;left:0;z-index:1;background:#fff;box-shadow:1px 0 0 var(--line)}
   .load-table th:first-child{background:#f8f9f6}
