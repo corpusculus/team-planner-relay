@@ -1,0 +1,157 @@
+import { describe, it, expect } from 'vitest';
+import { createModel, normalize } from '../src/shared/model.js';
+import { estimate, percentile } from '../src/shared/estimate.js';
+import { sampleSettings, sampleState, liveSettings } from '../src/shared/defaults.js';
+import { mapIssues, mergeTasks, matchType } from '../src/shared/jira-map.js';
+import { validateSettings } from '../src/shared/validate.js';
+import { createService } from '../src/service.js';
+
+const TODAY = '2026-11-26';
+const memStore = (init = {}) => { const m = new Map(Object.entries(init)); return { get: async k => structuredClone(m.get(k)), set: async (k, v) => void m.set(k, structuredClone(v)), m }; };
+
+describe('scheduler', () => {
+  it('plans the demo portfolio in 4h slots', () => {
+    const settings = sampleSettings(), M = createModel(settings, TODAY), state = sampleState(settings);
+    const plan = M.schedule(state);
+    expect(plan.get('a2')).toMatchObject({ who: 2, start: 0 });
+    expect(Number.isFinite(plan.get('a3').start)).toBe(false); // waiting
+    for (const t of state.tasks) if (!t.wait && t.after !== 'a3') expect(plan.get(t.id).end - plan.get(t.id).start).toBe(M.remaining(t));
+  });
+
+  it('never plans unstarted work before today', () => {
+    const settings = sampleSettings(), M = createModel(settings, '2026-12-09'), state = sampleState(settings);
+    const plan = M.schedule(state), now = 7 * M.spd; // Wed 9 Dec is workday 7
+    for (const t of state.tasks) if (!t.started && Number.isFinite(plan.get(t.id).start)) expect(plan.get(t.id).start).toBeGreaterThanOrEqual(now);
+  });
+
+  it('applies a previewed change and records finished work as history', () => {
+    const settings = sampleSettings(), M = createModel(settings, TODAY), state = sampleState(settings);
+    const { next } = M.applyOp(state, { kind: 'draft', v: { kind: 'finish', taskId: 'a2', hours: 12 } }, { person: 2 });
+    expect(next.tasks.find(t => t.id === 'a2').actual).toBe(3);
+    expect(next.completed.at(-1)).toMatchObject({ type: 2, p: 2, s: 2, hours: 12 });
+  });
+
+  it('rescales positions when the slot size changes', () => {
+    const settings = sampleSettings(), state = sampleState(settings);
+    settings.general.slotHours = 2;
+    const n = normalize(state, settings);
+    expect(n.leave[0]).toEqual({ who: 4, start: 12, len: 8 });
+    expect(n.tasks.find(t => t.id === 'a0').work).toBe(state.tasks.find(t => t.id === 'a0').work * 2);
+    expect(() => createModel(settings, TODAY).schedule(n)).not.toThrow();
+  });
+});
+
+describe('estimator', () => {
+  const base = () => {
+    const s = sampleSettings();
+    s.types[1] = { ...s.types[1], baseHours: 12, bufferHours: 4 };
+    s.projects[1] = { ...s.projects[1], sizes: { 1: 'L' }, factors: ['vpn'] };
+    return s;
+  };
+  it('uses type default × size × complexity without history', () => {
+    const e = estimate(base(), { type: 1, p: 1, s: 1 }, [], TODAY);
+    expect(e.hours).toBeCloseTo(21.6);
+    expect(Math.ceil(e.hours / 4) * 4).toBe(24);
+    expect(e.source).toContain('Large system');
+  });
+  it('prefers the most specific history and normalises by multiplier', () => {
+    const s = base(), h = (p, hours, mult) => ({ type: 1, p, s: 1, hours, mult, at: '2026-06-01' });
+    const other = [h(5, 10, 1), h(6, 10, 1), h(7, 10, 1)];
+    expect(estimate(s, { type: 1, p: 1, s: 1 }, other, TODAY).hours).toBeCloseTo(10 * 1.8); // same system, scaled to L×VPN
+    const own = [h(1, 30, 1.8), h(1, 36, 1.8), h(1, 45, 1.8)];
+    const e = estimate(s, { type: 1, p: 1, s: 1 }, [...other, ...own], TODAY);
+    expect(e.source).toContain('same project and system');
+    expect(e.hours).toBeCloseTo(percentile([30, 36, 45], 70));
+  });
+  it('ignores history outside the window and can use Jira estimates', () => {
+    const s = base();
+    const old = [1, 2, 3].map(() => ({ type: 1, p: 1, s: 1, hours: 99, mult: 1, at: '2024-01-01' }));
+    expect(estimate(s, { type: 1, p: 1, s: 1 }, old, TODAY).source).toMatch(/^Type default/);
+    s.types[1].source = 'jira-estimate';
+    expect(estimate(s, { type: 1, p: 1, s: 1, originalEstimateSec: 7200 }, [], TODAY)).toMatchObject({ hours: 2, source: 'Jira original estimate' });
+  });
+});
+
+describe('jira mapping', () => {
+  const live = () => {
+    const s = liveSettings(sampleSettings());
+    s.people = [{ name: 'Ana Silva', role: '', access: 'team', skills: [1, 2], accountId: 'acc-ana', pmProjects: [], archived: false }];
+    s.projects = [{ name: 'Pilot', jiraKey: 'PIL', jql: '', due: '', lead: 0, back: null, sizes: {}, factors: [], archived: false }];
+    return s;
+  };
+  const issue = (id, fields) => ({ p: 0, issue: { id, key: 'PIL-' + id, fields: { summary: 'Issue ' + id, issuetype: { name: 'Task' }, labels: [], components: [], ...fields } } });
+
+  it('matches types, systems and blockers, and reports what it cannot plan', () => {
+    const s = live();
+    expect(matchType({ issuetype: { name: 'Bug' } }, s.types)).toBe(-1);
+    const { tasks, unmapped } = mapIssues([
+      issue('1', { components: [{ name: 'Integration' }], assignee: { accountId: 'acc-ana' } }),
+      issue('2', { components: [{ name: 'Data' }], issuelinks: [{ type: { name: 'Blocks' }, inwardIssue: { id: '1' } }] }),
+      issue('3', { issuetype: { name: 'Bug' } }),
+      issue('4', { components: [{ name: 'Controls' }] })
+    ], s, [], TODAY);
+    expect(tasks.map(t => [t.id, t.s, t.after, t.prefer])).toEqual([['jira-1', 1, null, 0], ['jira-2', 2, 'jira-1', undefined]]);
+    expect(unmapped.map(u => u.key)).toEqual(['PIL-3', 'PIL-4']);
+  });
+
+  it('keeps Relay progress across refreshes', () => {
+    const s = live(), M = createModel(s, TODAY);
+    const first = mapIssues([issue('1', { components: [{ name: 'Integration' }] })], s, [], TODAY).tasks;
+    let state = mergeTasks(normalize({ tasks: [] }, s), first);
+    state = M.applyOp(state, { kind: 'start', taskId: 'jira-1' }, { person: 0 }).next;
+    const again = mergeTasks(state, mapIssues([issue('1', { summary: 'Renamed', components: [{ name: 'Integration' }] })], s, [], TODAY).tasks);
+    expect(again.tasks[0]).toMatchObject({ name: 'Renamed', started: { who: 0 } });
+    expect(mergeTasks(again, []).tasks[0].gone).toBe(true); // left the filter with work recorded
+  });
+});
+
+describe('service', () => {
+  const liveStore = () => {
+    const settings = liveSettings(sampleSettings());
+    settings.people = [
+      { name: 'Ana Silva', role: '', access: 'member', skills: [1], accountId: 'ana', pmProjects: [], archived: false },
+      { name: 'Max Lead', role: '', access: 'team', skills: [1], accountId: 'max', pmProjects: [], archived: false },
+      { name: 'Pia PM', role: '', access: 'pm', skills: [], accountId: 'pia', pmProjects: [0], archived: false }
+    ];
+    settings.projects = [0, 1].map(i => ({ name: 'P' + i, jiraKey: '', jql: '', due: '', lead: 0, back: 1, sizes: {}, factors: [], archived: false }));
+    const plan = { rev: 3, unit: { slotHours: 4, workdayHours: 8 }, tasks: [0, 1].map(i => ({ id: 't' + i, p: i, s: 1, type: 1, name: 'Secret ' + i, work: 2, buffer: 1, rank: i, after: null, ready: 0 })), leave: [], fixed: [], notes: { 1: 'internal' }, logs: [], completed: [], unmapped: [], ops: [],
+      privateTime: [{ id: 'pt', who: 0, start: 10, len: 1, name: 'Dentist' }] };
+    return memStore({ settings, plan });
+  };
+  const ctx = (accountId, admin = false) => ({ accountId, isAdmin: async () => admin });
+
+  it('enforces roles on changes', async () => {
+    const svc = createService({ store: liveStore(), jira: null, today: () => TODAY });
+    const urgent = { kind: 'draft', baseRev: 3, v: { kind: 'urgent', p: 0, s: 1, type: 1, name: 'X', hours: 8, buffer: 0, start: 0 } };
+    expect((await svc.handle('apply', ctx('ana'), { op: urgent })).error).toMatch(/team manager/);
+    expect((await svc.handle('apply', ctx('pia'), { op: { kind: 'note', p: 1, text: 'hi' } })).error).toMatch(/their projects/);
+    expect((await svc.handle('apply', ctx('stranger'), { op: urgent })).error).toMatch(/not on the planning team/);
+    const ok = await svc.handle('apply', ctx('max'), { op: urgent, opId: 'op-1' });
+    expect(ok.state.tasks).toHaveLength(3);
+    const replay = await svc.handle('apply', ctx('max'), { op: urgent, opId: 'op-1' });
+    expect(replay.state.tasks).toHaveLength(3); // retried request applied once
+    expect((await svc.handle('apply', ctx('max'), { op: urgent })).code).toBe('stale');
+  });
+
+  it('only sends a PM what they may see', async () => {
+    const svc = createService({ store: liveStore(), jira: null, today: () => TODAY });
+    const ws = await svc.handle('getWorkspace', ctx('pia'), {});
+    expect(ws.state.tasks.map(t => t.name)).toEqual(['Secret 0', 'Other team work']);
+    expect(ws.state.privateTime[0].name).toBe('Private time');
+    expect(ws.state.notes).toEqual({});
+    const member = await svc.handle('getWorkspace', ctx('ana'), {});
+    expect(member.state.privateTime[0].name).toBe('Dentist');
+  });
+
+  it('validates settings and keeps lists append-only', async () => {
+    const store = liveStore(), svc = createService({ store, jira: null, today: () => TODAY });
+    expect((await svc.handle('saveSettings', ctx('max'), { settings: {} })).error).toMatch(/administrators/);
+    const s = (await store.get('settings'));
+    expect((await svc.handle('saveSettings', ctx('max', true), { settings: { ...s, general: { ...s.general, slotHours: 3 } } })).error).toMatch(/multiple/);
+    expect((await svc.handle('saveSettings', ctx('max', true), { settings: { ...s, people: s.people.slice(1) } })).error).toMatch(/Archive/);
+    const saved = await svc.handle('saveSettings', ctx('max', true), { settings: { ...s, general: { ...s.general, slotHours: 2 }, evil: 1 } });
+    expect(saved.settings.general.slotHours).toBe(2);
+    expect(saved.settings.evil).toBeUndefined();
+    expect(() => validateSettings({ ...s, general: { ...s.general, planStart: '2026-12-01' } })).toThrow(/Monday/);
+  });
+});

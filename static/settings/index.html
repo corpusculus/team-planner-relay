@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Relay settings</title>
+<link rel="stylesheet" href="../common/style.css">
+<style>
+.settings main{padding-top:24px}
+.savebar{position:sticky;top:0;z-index:5;background:var(--wash);display:flex;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line);margin-bottom:18px}
+.savebar .grow{flex:1}
+.panel .content h3{margin:18px 0 8px}
+.grid-form{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.data input,.data select{width:100%;min-width:70px}
+.data td{vertical-align:top;padding:8px 10px}
+.data input[type=number]{max-width:96px}
+.checks{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:13px}
+.checks label{display:flex;gap:4px;align-items:center;white-space:nowrap}
+.archived{opacity:.5}
+.card{border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:0 0 12px;background:#fff}
+.card-head{display:flex;gap:10px;align-items:center;margin-bottom:10px}
+.card-head input{font-weight:650;flex:1}
+.hint{font-size:12px;color:var(--muted);margin:4px 0 0}
+.result{font-size:15px;padding:12px;border-radius:8px;background:#edf3ed;margin-top:12px}
+.modebox{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.badge{font:11px var(--mono);padding:3px 7px;border-radius:5px;background:#193a36;color:#c2e9bb}
+</style>
+</head>
+<body class="settings">
+<header class="top"><div class="bar"><span class="logo" aria-hidden="true"><i></i><i></i><i></i></span><span class="brand">Relay</span><span class="divider"></span><span class="workspace">Settings</span><a id="plannerLink" href="../planner/" hidden style="margin-left:auto;color:#c4d4cd">← Planner</a></div></header>
+<main>
+<div class="savebar"><span class="grow" id="status" role="status"></span><button id="discard">Discard changes</button><button class="primary" id="save">Save settings</button></div>
+<div id="view"><p class="empty">Loading settings…</p></div>
+</main>
+<dialog id="modal" aria-labelledby="dialogTitle"><div class="modalhead"><h2 id="dialogTitle"></h2><button class="close" id="close" aria-label="Close dialog">×</button></div><div id="body" class="content"></div></dialog>
+<script type="module" src="./main.js"></script>
+</body>
+</html>

@@ -1,0 +1,34 @@
+modules:
+  jira:globalPage:
+    - key: relay-planner
+      title: Relay
+      resource: planner
+      resolver:
+        function: resolver
+  jira:adminPage:
+    - key: relay-settings
+      title: Relay settings
+      resource: settings
+      resolver:
+        function: resolver
+  function:
+    - key: resolver
+      handler: index.handler
+resources:
+  - key: planner
+    path: dist/planner
+  - key: settings
+    path: dist/settings
+permissions:
+  scopes:
+    - read:jira-work
+    - read:jira-user
+    - storage:app
+  content:
+    styles:
+      - unsafe-inline
+app:
+  runtime:
+    name: nodejs22.x
+  # Replaced by `forge register`.
+  id: ari:cloud:ecosystem::app/00000000-0000-0000-0000-000000000000
