@@ -435,21 +435,21 @@ function memberHome() {
   const rows = open.filter(t => t !== focus).map(t => [esc(projects[t.p].name), '<button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button><small class="meta-line">' + esc(systems[t.s]) + '</small>', span(plan.get(t.id).start, plan.get(t.id).end - 1), statusOf(t)]);
   return '<div class="dash-pair"><section class="focus-card"><div class="focus-label">' + (focus?.started ? 'In progress' : focus?.wait ? 'Waiting' : 'Next assignment') + '</div>' + focusCard + '</section><section class="panel summary-card"><div class="section-head"><h2>My timesheet</h2><small>Week of ' + fmt(reportWeek * weekSlots) + '</small></div><div class="time-large">' + hours(sumTime(entries)) + '</div><div class="sub">Recorded this week</div><button class="link" data-page="sheet">Open timesheet →</button></section></div>' + tableBox('My other assignments', ['Project', 'Task and system', 'Forecast', 'State'], rows, 'Your queue is clear.');
 }
-/** One entry per slot of the week: work, buffer, protected, away or free. */
+/** One entry per slot of the week: 'work:<project>', 'buffer:<project>', protected, away, off or free. */
 function loadSlots(w, person) {
   const start = w * weekSlots, end = start + weekSlots, slots = Array(weekSlots).fill('free');
   function put(a, b, k) { for (let i = Math.max(start, a); i < Math.min(b, end); i++) slots[i - start] = k; }
   for (const l of state.leave.filter(l => l.who === person)) put(l.start, l.start + l.len, 'away');
   for (const b of state.privateTime.filter(b => b.who === person)) put(b.start, b.start + b.len, 'protected');
   for (const t of state.tasks) {
-    for (const h of t.history || []) if (h.who === person) put(h.start, h.end, 'work');
+    for (const h of t.history || []) if (h.who === person) put(h.start, h.end, 'work:' + t.p);
     const x = plan.get(t.id); if (x.who !== person) continue;
     if (Number.isFinite(x.start)) {
       const until = x.start + Math.max(1, effectiveWork(t) - spent(t));
-      put(x.start, until, 'work'); put(until, x.end, 'buffer');
+      put(x.start, until, 'work:' + t.p); put(until, x.end, 'buffer:' + t.p);
     } else {
       const f = state.fixed.find(f => f.taskId === t.id);
-      if (f && t.firstStart == null) put(f.start, f.start + duration(t), 'work');
+      if (f && t.firstStart == null) put(f.start, f.start + duration(t), 'work:' + t.p);
     }
   }
   return slots.map((k, i) => (off(person, start + i) ? 'off' : k));
@@ -465,7 +465,10 @@ function managerHome() {
   const team = active(people), loads = team.map(([, i]) => loadSlots(reportWeek, i));
   const waiting = state.tasks.filter(t => t.wait), late = projects.filter((p, i) => !p.archived && Number.isFinite(finish(state, plan, i)) && finish(state, plan, i) > p.due);
   const legend = { work: 'Project work', buffer: 'Buffer', protected: 'Private', away: 'Away', free: 'Open', off: 'Not working' };
-  const cell = day => day.every(k => k === day[0]) ? '<span class="load-cell ' + day[0] + '">' + legend[day[0]] + '</span>' : '<span class="load-split">' + day.map(k => '<span class="load-cell ' + k + '" title="' + legend[k] + '">' + legend[k] + '</span>').join('') + '</span>';
+  // Work and buffer cells name the project and use its calendar colour.
+  const label = k => { const [kind, p] = k.split(':'); return p == null ? legend[kind] : (kind === 'buffer' ? 'Buffer · ' : '') + (projects[p]?.name ?? 'Project'); };
+  const slotCell = k => { const [kind, p] = k.split(':'); return '<span class="load-cell ' + kind + (p != null ? ' proj" style="' + color(Number(p)) : '') + '" title="' + esc(label(k)) + '">' + esc(label(k)) + '</span>'; };
+  const cell = day => day.every(k => k === day[0]) ? slotCell(day[0]) : '<span class="load-split">' + day.map(slotCell).join('') + '</span>';
   const capacity = '<section class="panel"><div class="section-head"><div><h2>Team capacity</h2><p>One cell per person per workday, split into ' + slotH + 'h slots when they differ.</p></div>' + weekPicker(reportWeek) + '</div><div class="scroll"><table class="data load-table"><thead><tr><th>Team member</th>' + Array.from({ length: 5 }, (_, i) => '<th>' + fmt(reportWeek * weekSlots + i * spd, { weekday: 'short', day: 'numeric' }) + '</th>').join('') + '</tr></thead><tbody>' + loads.map((slots, r) => '<tr><td>' + esc(team[r][0].name) + '</td>' + Array.from({ length: 5 }, (_, d) => '<td>' + cell(slots.slice(d * spd, d * spd + spd)) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div></section>';
   return metrics([['Open capacity this week', loads.flat().filter(k => k === 'free').length * slotH + 'h'], ['Tasks waiting now', waiting.length], ['Late milestone forecasts', late.length]]) + capacity + tableBox('Blockers to review', ['Project', 'Task', 'Owner', 'Waiting for'], waiting.map(t => [esc(projects[t.p].name), '<button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button>', esc(who(t.wait.who).name), esc(t.wait.reason)]), 'No waiting tasks.') + (differs.length ? tableBox('Jira assignee differs from the plan', ['Task', 'Planned for', 'Jira assignee'], differs.map(([t, x]) => ['<button class="link" data-task="' + t.id + '">' + esc((t.key ? t.key + ' ' : '') + t.name) + '</button>', esc(who(x.who).name), esc(t.assignee.name)]), '') : '') + milestones() +
     tableBox('Recent changes', ['When', 'Who', 'What'], (state.changes ?? []).slice(0, 8).map(c => [new Date(c.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }), esc(c.by), esc(c.what)]), 'No changes yet.');
