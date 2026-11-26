@@ -38,6 +38,11 @@ Estimation: Jira estimate or story points if the task type says so; otherwise P7
 (same project+system → same system → same type), buffer up to P90; otherwise type default × system size × complexity factors.
 Hours round up to slots (default 4h, so at most 2 tasks per person per day).
 
+## Support and privacy
+
+- Support: https://github.com/corpusculus/team-planner-relay/issues
+- Privacy policy: [PRIVACY.md](PRIVACY.md)
+
 ## License
 
 MIT, free of charge. See [LICENSE](LICENSE).

@@ -57,6 +57,10 @@ A sandbox or test site is a good first stop.
 4. **Task types:** check the rules that match Jira issue types or components to task types.
 5. Save, then press *Refresh from Jira now*. Issues that can't be matched are listed under *Needs mapping*.
 
+## Support and privacy
+
+Questions and bug reports: https://github.com/corpusculus/team-planner-relay/issues. Privacy policy: https://github.com/corpusculus/team-planner-relay/blob/main/PRIVACY.md
+
 ## Removing it
 
 Jira settings → Apps → Manage apps → Team Planner Relay → Uninstall. Nothing in Jira itself was changed by Relay.
