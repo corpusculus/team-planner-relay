@@ -129,12 +129,16 @@ describe('service', () => {
     const svc = createService({ store: liveStore(), jira: null, today: () => TODAY });
     const urgent = { kind: 'draft', baseRev: 3, v: { kind: 'urgent', p: 0, s: 1, type: 1, name: 'X', hours: 8, buffer: 0, start: 0 } };
     expect((await svc.handle('apply', ctx('ana'), { op: urgent })).error).toMatch(/team manager/);
-    expect((await svc.handle('apply', ctx('pia'), { op: { kind: 'note', p: 1, text: 'hi' } })).error).toMatch(/their projects/);
+    expect((await svc.handle('apply', ctx('pia'), { op: { kind: 'note', p: 1, text: 'hi' } })).error).toMatch(/own projects/);
+    const pmTask = { kind: 'draft', baseRev: 3, v: { kind: 'queued', p: 1, s: 1, type: 1, name: 'PM task', hours: 8, buffer: 0, start: 0, prefer: 1 } };
+    expect((await svc.handle('apply', ctx('pia'), { op: pmTask })).error).toMatch(/own projects/); // project 1 is not Pia's
+    const added = await svc.handle('apply', ctx('pia'), { op: { ...pmTask, v: { ...pmTask.v, p: 0 } } });
+    expect(added.state.tasks.find(t => t.name === 'PM task')).toMatchObject({ p: 0, prefer: 1 });
     expect((await svc.handle('apply', ctx('stranger'), { op: urgent })).error).toMatch(/not on the planning team/);
-    const ok = await svc.handle('apply', ctx('max'), { op: urgent, opId: 'op-1' });
-    expect(ok.state.tasks).toHaveLength(3);
-    const replay = await svc.handle('apply', ctx('max'), { op: urgent, opId: 'op-1' });
-    expect(replay.state.tasks).toHaveLength(3); // retried request applied once
+    const ok = await svc.handle('apply', ctx('max'), { op: { ...urgent, baseRev: 4 }, opId: 'op-1' });
+    expect(ok.state.tasks).toHaveLength(4);
+    const replay = await svc.handle('apply', ctx('max'), { op: { ...urgent, baseRev: 4 }, opId: 'op-1' });
+    expect(replay.state.tasks).toHaveLength(4); // retried request applied once
     expect((await svc.handle('apply', ctx('max'), { op: urgent })).code).toBe('stale');
   });
 

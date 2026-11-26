@@ -201,7 +201,8 @@ export function createService({ store, jira, today = utcToday }) {
     if (me.demo || me.access === 'team') return;
     if (me.access === 'pm') {
       if (op.kind === 'note' && me.pmProjects.includes(Number(op.p))) return;
-      throw new UserError('Project managers can only edit shared notes on their projects.');
+      if (op.kind === 'draft' && op.v?.kind === 'queued' && me.pmProjects.includes(Number(op.v.p))) return;
+      throw new UserError('Project managers can add tasks and notes on their own projects only.');
     }
     if (!MEMBER_OPS.has(op.kind) || (op.kind === 'draft' && !MEMBER_DRAFTS.has(op.v?.kind))) throw new UserError('Ask the team manager to make this change.');
     if (op.kind === 'draft' && op.v.kind === 'private') {

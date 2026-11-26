@@ -13,7 +13,7 @@ let spd, slotH, weekSlots, timeInJira = false;
 // View state
 let role = 'member', pmProject = 0, member = 2, reportWeek = 0;
 try { const last = sessionStorage.getItem('relay.preview.role'); if (['member', 'team', 'pm'].includes(last)) role = last; const w = sessionStorage.getItem('relay.preview.member'); if (w !== null) member = Number(w); } catch {}
-let week = 0, personFilter = 'all', tab = role === 'pm' ? 'outlook' : 'home', filter = 'all', showAll = false, draft = null, formValues = null, busy = false, booted = false;
+let week = 0, pmCal = 'all', personFilter = 'all', tab = role === 'pm' ? 'outlook' : 'home', filter = 'all', showAll = false, draft = null, formValues = null, busy = false, booted = false;
 
 function useWorkspace(ws) {
   settings = ws.settings; today = ws.today; me = ws.me; state = ws.state;
@@ -102,13 +102,13 @@ function render() {
   const title = tab === 'home' ? (personal ? 'My work' : 'Team overview') : tab === 'sheet' ? 'My timesheet' : tab === 'schedule' && personal ? 'My calendar' : tab === 'schedule' && pm ? 'Project calendar' : tab === 'report' ? (personal ? 'My weekly report' : pm ? 'Project report' : 'Team report') : pageInfo[tab][0];
   $('title').textContent = title;
   const counts = active(people).length + ' people across ' + active(projects).length + ' projects';
-  $('intro').textContent = tab === 'home' ? (personal ? who(member).name + ' · ' + (who(member).role || 'Team member') : counts + '. Review available capacity and work that needs a decision.') : tab === 'report' ? (pm ? 'Project hours and delivery outlook.' : personal ? 'A weekly summary of your recorded work.' : 'Weekly hours by person and project.') : (pm && tab === 'schedule' ? 'Who works on ' + (projects[pmProject]?.name ?? 'your project') + ' and when. Their other work shows as busy time.' : personal && tab === 'schedule' ? 'Your assignments, protected time, and troubleshooting reserves.' : pageInfo[tab][1]);
+  $('intro').textContent = tab === 'home' ? (personal ? who(member).name + ' · ' + (who(member).role || 'Team member') : counts + '. Review available capacity and work that needs a decision.') : tab === 'report' ? (pm ? 'Project hours and delivery outlook.' : personal ? 'A weekly summary of your recorded work.' : 'Weekly hours by person and project.') : (pm && tab === 'schedule' ? 'Who works on your projects and when, and where they are free. Their other work shows as busy time.' : personal && tab === 'schedule' ? 'Your assignments, protected time, and troubleshooting reserves.' : pageInfo[tab][1]);
   for (const k of Object.keys(pageInfo)) {
     const btn = $(k + 'Tab'); btn.hidden = !pages.includes(k);
     if (k === 'home') btn.textContent = personal ? 'My work' : 'Overview';
     btn.classList.toggle('active', k === tab); btn.setAttribute('aria-current', k === tab ? 'page' : 'false');
   }
-  const views = { home: personal ? memberHome : managerHome, queue: queueView, schedule: () => (role === 'pm' ? pmHeader() + (projects[pmProject] ? board() : '') : board() + (role === 'team' ? milestones() : '')), coverage, outlook: pmView, sheet: timesheetView, report: reportView, rules: rulesView };
+  const views = { home: personal ? memberHome : managerHome, queue: queueView, schedule: () => (role === 'pm' ? pmCalendarHeader() : board() + (role === 'team' ? milestones() : '')), coverage, outlook: pmView, sheet: timesheetView, report: reportView, rules: rulesView };
   $('view').innerHTML = views[tab]();
   // Phones show table rows as labelled blocks (CSS .stack); labels come from the header cells.
   for (const table of $('view').querySelectorAll('table.data:not(.load-table)')) {
@@ -120,8 +120,8 @@ function render() {
 
 function board() {
   // A project manager sees the people on their project; work on other projects only as busy time.
-  const pmMode = role === 'pm', pp = projects[pmProject];
-  const onProject = w => pp && (w === pp.lead || w === pp.back || state.tasks.some(t => t.p === pmProject && plan.get(t.id)?.who === w));
+  const pmMode = role === 'pm', mine = pmMode ? (pmCal === 'all' ? me.pmProjects : [Number(pmCal)]) : [];
+  const onProject = w => mine.some(i => projects[i] && (w === projects[i].lead || w === projects[i].back)) || state.tasks.some(t => mine.includes(t.p) && plan.get(t.id)?.who === w);
   const busy = '<div class="block other" style="STYLE"><b>Other work</b><small>Busy</small></div>';
   const start = week * weekSlots, cols = weekSlots;
   const rows = people.map((p, w) => {
@@ -137,7 +137,7 @@ function board() {
       for (let s = a; s < b; s++) { if (off(w, s)) continue; let e = s + 1; while (e < b && !off(w, e)) e++; add(s, e, html); s = e; }
     }
     for (const t of state.tasks) {
-      if (pmMode && t.p !== pmProject) {
+      if (pmMode && !mine.includes(t.p)) {
         for (const h of t.history || []) if (h.who === w) add(h.start, h.end, busy);
         const x = plan.get(t.id);
         if (x.who === w && Number.isFinite(x.start)) addWorking(x.start, x.end, busy);
@@ -162,7 +162,11 @@ function board() {
     for (const l of state.leave.filter(l => l.who === w)) for (let d = l.start; d < l.start + l.len; d++) away.add(d);
     for (let d = start; d < start + cols; d++) { if (!away.has(d)) continue; let e = d + 1; while (e < start + cols && away.has(e)) e++; add(d, e, '<div class="block away" style="STYLE"><b>Time off</b><small>Unavailable</small></div>'); d = e - 1; }
     for (let d = start; d < start + cols; d++) { if (!off(w, d)) continue; let e = d + 1; while (e < start + cols && off(w, e)) e++; add(d, e, '<div class="block away" style="STYLE"><b>' + (M.isHoliday(d) ? 'Holiday' : 'Not working') + '</b><small>' + (M.isHoliday(d) ? 'Public holiday' : 'Outside working hours') + '</small></div>'); d = e - 1; }
-    return '<div class="person grid"><div class="who"><span class="avatar">' + esc(p.initials) + '</span><div><b>' + esc(p.name) + '</b><small>' + esc(p.role || '') + '</small></div></div><div class="lane" style="grid-template-columns:repeat(' + cols + ',minmax(0,1fr))">' + blocks.join('') + '</div></div>';
+    // Free time from now on, so managers can see where a task fits; clicking it starts "Add a task" there.
+    const load = role === 'member' ? [] : loadSlots(week, w).map((k, i) => (k === 'free' && start + i >= M.now ? 'free' : k));
+    for (let d = 0; d < load.length; d++) { if (load[d] !== 'free') continue; let e = d + 1; while (e < load.length && load[e] === 'free') e++; add(start + d, start + e, '<button class="block free" data-free-who="' + w + '" data-free-start="' + (start + d) + '" data-free-hours="' + (e - d) * slotH + '" style="STYLE" title="Add a task here"><b>Free · ' + (e - d) * slotH + 'h</b><small>Add a task</small></button>'); d = e - 1; }
+    const freeHours = load.filter(k => k === 'free').length * slotH;
+    return '<div class="person grid"><div class="who"><span class="avatar">' + esc(p.initials) + '</span><div><b>' + esc(p.name) + '</b><small>' + (role === 'member' ? esc(p.role || '') : '<span class="free-h">' + freeHours + 'h free this week</span>') + '</small></div></div><div class="lane" style="grid-template-columns:repeat(' + cols + ',minmax(0,1fr))">' + blocks.join('') + '</div></div>';
   }).join('');
   const nowWeek = Math.floor(M.now / weekSlots);
   return '<section class="panel"><div class="section-head"><div class="row"><h2>' + span(start, start + cols - 1) + '</h2><span class="tag">' + (week === nowWeek ? 'Planning week' : week < nowWeek ? 'Past week' : 'Forecast week') + '</span></div><div class="controls"><button class="arrow" id="prev" aria-label="Previous week" ' + (week === 0 ? 'disabled' : '') + '>‹</button><button id="first">This week</button><button class="arrow" id="next" aria-label="Next week" ' + (week >= endWeek() ? 'disabled' : '') + '>›</button></div></div><div class="scroll"><div class="board"><div class="grid days"><div>Team member</div>' + Array.from({ length: 5 }, (_, i) => '<div>' + fmt(start + i * spd, { weekday: 'short', day: 'numeric' }) + (M.isHoliday(start + i * spd) ? ' · Holiday' : '') + '</div>').join('') + '</div>' + rows + '</div></div><div class="foot"><span>Striped task buffers reserve time for troubleshooting · ' + slotH + 'h slots</span><span>Week ' + (week + 1) + ' of ' + (endWeek() + 1) + '</span></div></section>';
@@ -264,7 +268,7 @@ function values() { return Object.fromEntries(new FormData($('changeForm'))); }
 const hourInput = (label, key, hours, min) => '<label class="field">' + label + '<input type="number" required min="' + min + '" step="' + slotH + '" max="8760" name="' + key + '" value="' + Number(hours) + '"></label>';
 
 function changeForm(v = {}) {
-  const kind = v.kind || 'urgent', p = Number(v.p ?? active(projects)[0]?.[1] ?? 0);
+  const kind = v.kind || 'urgent', p = Number(v.p ?? (role === 'pm' ? me.pmProjects[0] : active(projects)[0]?.[1]) ?? 0);
   const dates = Array.from({ length: (endWeek() + 2) * weekSlots }, (_, i) => i).filter(i => i >= M.now).map(i => [i, slotLabel(i)]);
   const dayDates = dates.filter(([i]) => i % spd === 0).map(([i]) => [i, fmt(i, { weekday: 'short', month: 'short', day: 'numeric' })]);
   const hourChoices = Array.from({ length: 20 }, (_, i) => [(i + 1) * slotH, (i + 1) * slotH + 'h']);
@@ -289,14 +293,14 @@ function changeForm(v = {}) {
     modal('Task timing', '<p><b>' + esc(projects[task.p].name) + ' · ' + esc(task.name) + '</b><br>Currently planned for ' + slotLabel(plan.get(task.id).start) + '.</p><form id="changeForm"><input type="hidden" name="kind" value="timing"><input type="hidden" name="taskId" value="' + task.id + '"><label class="field">Fixed start date (optional)<input type="date" name="stamp" min="' + settings.general.planStart + '" value="' + esc(stamp) + '"></label><p class="sub">Use an agreed date to anchor the start and share this task and date with the PM. Leave blank for flexible scheduling.</p>' + footer + '</form>');
     return;
   }
-  let fields = role === 'member' && kind === 'private' ? '<input type="hidden" name="kind" value="private"><input type="hidden" name="who" value="' + member + '">' : selectField('Change to test', 'kind', [['queued', 'Add a task to the queue'], ['urgent', 'Add an urgent task'], ['leave', 'Mark a person away'], ...(state.tasks.some(t => t.actual == null) ? [['extend', 'Extend an existing task']] : []), ['private', 'Protect private team time']], kind, true);
+  let fields = role === 'pm' ? '<input type="hidden" name="kind" value="queued">' : role === 'member' && kind === 'private' ? '<input type="hidden" name="kind" value="private"><input type="hidden" name="who" value="' + member + '">' : selectField('Change to test', 'kind', [['queued', 'Add a task to the queue'], ['urgent', 'Add an urgent task'], ['leave', 'Mark a person away'], ...(state.tasks.some(t => t.actual == null) ? [['extend', 'Extend an existing task']] : []), ['private', 'Protect private team time']], kind, true);
   if (kind === 'urgent' || kind === 'queued') {
     const typeList = active(types), type = Number(v.type ?? typeList[typeList.length - 1]?.[1] ?? 0);
     const sys = projects[p]?.systems ?? [], s = sys.includes(Number(v.s)) ? Number(v.s) : sys.includes(types[type]?.system) ? types[type].system : sys[0];
     const est = s == null ? null : estimate(settings, { type, p, s }, state.completed, today);
     const estHours = est ? Math.max(1, toSlots(est.hours, slotH)) * slotH : slotH, estBuffer = est ? toSlots(est.buffer, slotH) * slotH : 0;
     fields += selectField('Task type', 'type', typeList.map(([a, i]) => [i, a.name]), type, true);
-    fields += '<label class="field full">Task name<input required maxlength="70" name="name" value="' + esc(v.name ?? (kind === 'urgent' ? 'Urgent ' + types[type].name.toLowerCase() : types[type].name)) + '"></label>' + selectField('Project', 'p', active(projects).map(([x, i]) => [i, x.name]), p) + selectField('System', 's', sys.map(x => [x, systems[x]]), s) + selectField('Earliest start', 'start', dates, v.start ?? Math.max(week * weekSlots, M.now)) + hourInput('Clear-sky hours', 'hours', v.keepHours ? v.hours : estHours, slotH) + hourInput('Buffer hours', 'buffer', v.keepHours ? v.buffer : estBuffer, 0) + '<input type="hidden" name="source" value="' + esc(est?.source ?? '') + '"><input type="hidden" name="estHours" value="' + estHours + '"><p class="source full">' + (est ? 'Suggested: ' + estHours + 'h + ' + estBuffer + 'h buffer · ' + esc(est.source) : 'Nobody on this project covers a system yet.') + '</p>';
+    fields += '<label class="field full">Task name<input required maxlength="70" name="name" value="' + esc(v.name ?? (kind === 'urgent' ? 'Urgent ' + types[type].name.toLowerCase() : types[type].name)) + '"></label>' + selectField('Project', 'p', active(projects).filter(([, i]) => role !== 'pm' || me.pmProjects.includes(i)).map(([x, i]) => [i, x.name]), p) + selectField('System', 's', sys.map(x => [x, systems[x]]), s) + selectField('Earliest start', 'start', dates, v.start ?? Math.max(week * weekSlots, M.now)) + hourInput('Clear-sky hours', 'hours', v.keepHours ? v.hours : estHours, slotH) + hourInput('Buffer hours', 'buffer', v.keepHours ? v.buffer : estBuffer, 0) + (v.prefer != null && v.prefer !== '' ? '<input type="hidden" name="prefer" value="' + esc(v.prefer) + '"><input type="hidden" name="fit" value="' + esc(v.fit ?? '') + '"><p class="source full">Preferred owner: ' + esc(who(Number(v.prefer)).name) + ', from ' + slotLabel(Number(v.start)) + '</p>' + (v.fit && estHours + estBuffer > Number(v.fit) ? '<p class="td-warn full">This free time holds ' + v.fit + 'h, but the task needs ' + (estHours + estBuffer) + 'h with buffer. Work is planned as one block, so it will start later. Shorten it to fit, or check the preview.</p>' : '') : '') + '<input type="hidden" name="source" value="' + esc(est?.source ?? '') + '"><input type="hidden" name="estHours" value="' + estHours + '"><p class="source full">' + (est ? 'Suggested: ' + estHours + 'h + ' + estBuffer + 'h buffer · ' + esc(est.source) : 'Nobody on this project covers a system yet.') + '</p>';
   }
   if (kind === 'private') {
     const block = state.privateTime.find(b => b.id === v.blockId);
@@ -307,7 +311,8 @@ function changeForm(v = {}) {
   }
   if (kind === 'leave') fields += selectField('Team member', 'who', active(people).map(([x, i]) => [i, x.name]), v.who ?? 0, true) + selectField('First day away', 'start', dayDates, v.start ?? Math.max(week * weekSlots, M.now)) + selectField('Time away', 'days', dayChoices, v.days ?? 2);
   if (kind === 'extend') fields += selectField('Task', 'taskId', state.tasks.filter(t => t.actual == null).map(t => [t.id, projects[t.p].name + ' · ' + t.name]), v.taskId, true) + selectField('Additional expected hours', 'hours', hourChoices, v.hours ?? slotH, true);
-  modal('Test a change', '<p>Preview the effect on the published schedule. You decide whether to apply it.</p><form id="changeForm"><div class="formgrid">' + fields + '</div>' + footer + '</form>');
+  const adding = role === 'pm' || v.prefer != null;
+  modal(adding ? 'Add a task' : 'Test a change', '<p>' + (adding ? 'Preview where it lands and what it moves before you apply it.' : 'Preview the effect on the published schedule. You decide whether to apply it.') + '</p><form id="changeForm"><div class="formgrid">' + fields + '</div>' + footer + '</form>');
 }
 
 function preview(v) {
@@ -355,6 +360,7 @@ document.addEventListener('change', e => {
   if (id === 'field-p') { const v = values(); delete v.s; changeForm(v); }
   if (id === 'field-s') changeForm(values());
   if (id === 'personFilter') { personFilter = e.target.value; render(); }
+  if (id === 'pmCal') { pmCal = e.target.value; render(); }
   if (id === 'pmProject') { pmProject = Number(e.target.value); announce(''); render(); }
 });
 document.addEventListener('submit', e => {
@@ -382,6 +388,13 @@ document.addEventListener('click', e => {
 function noteView(i) {
   const note = state.notes[i] || '';
   return '<h3>Shared project note</h3>' + (note ? '<p class="context-note">' + esc(note) + '</p>' : '') + '<button data-note="' + i + '">' + (note ? 'Edit note' : 'Add a note') + '</button>';
+}
+/** Calendar header for project managers: all their projects or one, and a way to add a task. */
+function pmCalendarHeader() {
+  const mine = me.pmProjects.filter(i => projects[i] && !projects[i].archived);
+  if (!mine.length) return '<p class="empty">No projects are assigned to you yet. Ask a Jira administrator to add them in Relay settings.</p>';
+  if (pmCal !== 'all' && !mine.includes(Number(pmCal))) pmCal = 'all';
+  return '<div class="queue-tools"><label>Projects <select id="pmCal">' + options([['all', 'All my projects'], ...mine.map(i => [i, projects[i].name])], pmCal) + '</select></label><button id="addQueued">＋ Add task</button></div>' + board();
 }
 /** Project picker for project managers, shared by the outlook and calendar. */
 function pmHeader() {
@@ -420,8 +433,13 @@ document.addEventListener('click', event => {
     const i = Number(button.dataset.note);
     modal(projects[i].name + ' · Shared project note', '<form id="noteForm" data-project-index="' + i + '"><label class="field">Visible to the team and PM<textarea rows="4" id="sharedNote" maxlength="800">' + esc(state.notes[i] || '') + '</textarea></label><p class="sub">This is context for planning. Saving it leaves the schedule as it is.</p><div class="actions"><button data-dismiss type="button">Cancel</button><button class="primary">Save note</button></div></form>');
   }
+  if (button.dataset.freeWho !== undefined) {
+    const w = Number(button.dataset.freeWho), mine = role === 'pm' ? me.pmProjects : active(projects).map(([, i]) => i);
+    const p = (role === 'pm' && pmCal !== 'all' ? Number(pmCal) : null) ?? mine.find(i => projects[i].lead === w || projects[i].back === w) ?? mine[0];
+    changeForm({ kind: 'queued', p, start: button.dataset.freeStart, prefer: w, fit: button.dataset.freeHours });
+  }
+  if (button.id === 'addQueued') changeForm({ kind: 'queued', ...(role === 'pm' && pmCal !== 'all' ? { p: Number(pmCal) } : {}) });
   if (role === 'pm') return;
-  if (button.id === 'addQueued') changeForm({ kind: 'queued' });
   for (const op of ['estimate', 'finish', 'revise', 'pause', 'resume']) if (button.dataset[op]) changeForm({ kind: op, taskId: button.dataset[op] });
   if (button.dataset.start) send({ kind: 'start', taskId: button.dataset.start });
   if (button.dataset.timing && role === 'team') changeForm({ kind: 'timing', taskId: button.dataset.timing });

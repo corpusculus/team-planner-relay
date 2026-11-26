@@ -289,7 +289,7 @@ export function createModel(settings, todayIso) {
         id: 'u' + crypto.randomUUID().slice(0, 8), p, s, type, name,
         work: slotsOf(v.hours, 1), buffer: slotsOf(v.buffer), source: text(v.source, 120) || 'Entered in Relay',
         rank: v.kind === 'urgent' ? (ranks.length ? Math.min(...ranks) : 0) - 1 : (ranks.length ? Math.max(...ranks) : 0) + 1,
-        deps: [], ready: slotIdx(v.start)
+        deps: [], ready: slotIdx(v.start), ...(v.prefer != null && v.prefer !== '' && people[Number(v.prefer)] ? { prefer: Number(v.prefer) } : {})
       };
       next.tasks.push(t);
       summary = projects[p].name + ' · ' + name;

@@ -225,6 +225,9 @@ textarea{width:100%;min-width:0;font:inherit;border:1px solid #c7d1cb;border-rad
 .load-cell.proj{background:var(--tint);color:var(--fg);box-shadow:inset 3px 0 0 var(--accent)}
 .load-cell.buffer.proj{background:repeating-linear-gradient(135deg,var(--tint) 0 5px,#fff 5px 10px)}
 .load-cell.off{background:repeating-linear-gradient(-45deg,#f4f4f0 0 5px,#eaece7 5px 7px);color:#7a857f}
+.block.free{background:#fff;border:1px dashed #a4c3b4;color:#416352;cursor:pointer}
+.block.free:hover{background:#eef6f1;filter:none}
+.who .free-h{color:#1d6b4c;font-weight:600}
 .block.other{background:#eef1ee;border-left-color:#b8c4bd;color:#5d6b64}
 .tile-warn{font-size:12px;color:#964222;font-weight:600}
 .chip{display:inline-flex;align-items:center;gap:4px;background:#eef2ec;border-radius:6px;padding:2px 4px 2px 9px;font-size:13px}
