@@ -1,15 +1,15 @@
 {
-  "name": "relay-planner",
+  "name": "team-planner-relay",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Relay team planner as an Atlassian Forge app for Jira Cloud",
+  "description": "Team Planner Relay: team capacity planning, estimates and timesheets for Jira Cloud (Atlassian Forge app)",
   "scripts": {
     "dev": "vite",
     "build": "vite build --config vite.config.js --mode planner && vite build --config vite.config.js --mode settings",
     "test": "vitest run",
     "lint": "forge lint",
-    "deploy": "npm run build && forge deploy"
+    "deploy": "npm run build && forge deploy -e production"
   },
   "dependencies": {
     "@forge/api": "^8.5.1",

@@ -1,12 +1,12 @@
-# Relay — note for the Jira administrator
+# Team Planner Relay — note for the Jira administrator
 
 Relay is a team planning app for Jira Cloud, built on Atlassian Forge (Atlassian hosts and runs it; there is no external server).
 It was written by a team member as a private, free contribution under the MIT license (see LICENSE). It is not a Marketplace app.
 
 ## What it does
 
-- Adds **Apps → Relay**: work queue, team calendar, project outlook and timesheets for one planning team.
-- Adds **Jira settings → Apps → Relay settings** (admins only): team members, connected Jira projects, task types and estimation rules.
+- Adds **Apps → Team Planner Relay**: work queue, team calendar, project outlook and timesheets for one planning team.
+- Adds **Jira settings → Apps → Team Planner Relay settings** (admins only): team members, connected Jira projects, task types and estimation rules.
 - Until an admin switches it to live mode, it only shows fictional demo data. Nothing is read from Jira in demo mode.
 
 ## Access it asks for
@@ -16,6 +16,8 @@ It was written by a team member as a private, free contribution under the MIT li
 | `read:jira-work` | Read issues of the projects you connect, as the signed-in user, and check which issues a PM may see |
 | `read:jira-user` | Find people when adding team members; check that the caller is a Jira admin for the settings page |
 | `storage:app` | Store planning data (assignments, estimates, timesheets) in Forge storage inside this installation |
+
+The app is eligible for Atlassian's *Runs on Atlassian* program: it runs and stores data only on Atlassian's platform, with no outside servers.
 
 Relay **never writes to Jira**: no issue edits, transitions, assignments or worklogs. It reads issues using the access of the
 person who presses *Refresh*, and Jira's own permissions and issue security apply.
@@ -49,7 +51,7 @@ A sandbox or test site is a good first stop.
 
 ## First-time setup (5 minutes)
 
-1. Jira settings → Apps → **Relay settings** → *Switch to live Jira data*.
+1. Jira settings → Apps → **Team Planner Relay settings** → *Switch to live Jira data*.
 2. **People:** add the team (search by name), set each person's role and skills.
 3. **Projects:** connect one pilot project; choose its lead and backup.
 4. **Task types:** check the rules that match Jira issue types or components to task types.
@@ -57,7 +59,7 @@ A sandbox or test site is a good first stop.
 
 ## Removing it
 
-Jira settings → Apps → Manage apps → Relay → Uninstall. Nothing in Jira itself was changed by Relay.
+Jira settings → Apps → Manage apps → Team Planner Relay → Uninstall. Nothing in Jira itself was changed by Relay.
 
 ## Known limits (first version)
 

@@ -1,6 +1,6 @@
-# Relay for Jira
+# Team Planner Relay
 
-Team planner (queue, calendar, coverage, PM outlook, timesheets) as an Atlassian Forge app.
+Team capacity planner for Jira Cloud: work queue, calendar, coverage, PM outlook, estimates and timesheets, as an Atlassian Forge app. Free, MIT licensed.
 Started from `team-planner.html`; the scheduler and screens are the same, now backed by Forge storage and Jira issues.
 
 ## See it locally
@@ -15,11 +15,14 @@ Local mode runs the real backend in the browser (localStorage, no Jira). It star
 
 ## Put it in Jira
 
-1. Create a free dev site: https://developer.atlassian.com/platform/forge/getting-started/
-2. `npm i -g @forge/cli && forge login` (Atlassian email + API token)
-3. `forge register` (writes the real app id into `manifest.yml`)
-4. `npm run deploy && forge install` (choose Jira and your site)
-5. Jira → Apps → **Relay**. Admins: Jira settings → Apps → **Relay settings** to switch to live data, add people and connect projects.
+The app is registered as **Team Planner Relay** (Developer Space "Apps") and deployed to the Forge **production** environment.
+It is eligible for Atlassian's *Runs on Atlassian* program: no data leaves Atlassian.
+
+- **Deploy a new version:** `forge login` once, then `npm run deploy`. Admins accept new permissions with `forge install --upgrade` or from the app page in Jira.
+- **Install on a site you administer:** `forge install -e production --product jira --site <site>.atlassian.net`
+- **Install on someone else's site:** developer console → [Distribution](https://developer.atlassian.com/console/myapps/d480a29e-d346-449b-b4d8-8019c22c5279/manage/distribution) → enable sharing → copy the installation link → send it to that site's admin with [ADMIN.md](ADMIN.md).
+
+In Jira: Apps → **Team Planner Relay**. Admins: Jira settings → Apps → **Team Planner Relay settings**.
 
 ## How it fits together
 

@@ -1,13 +1,13 @@
 modules:
   jira:globalPage:
     - key: relay-planner
-      title: Relay
+      title: Team Planner Relay
       resource: planner
       resolver:
         function: resolver
   jira:adminPage:
     - key: relay-settings
-      title: Relay settings
+      title: Team Planner Relay settings
       resource: settings
       resolver:
         function: resolver
@@ -30,5 +30,4 @@ permissions:
 app:
   runtime:
     name: nodejs22.x
-  # Replaced by `forge register`.
-  id: ari:cloud:ecosystem::app/00000000-0000-0000-0000-000000000000
+  id: ari:cloud:ecosystem::app/d480a29e-d346-449b-b4d8-8019c22c5279
