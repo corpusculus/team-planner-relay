@@ -1,5 +1,5 @@
 
-:root{--ink:#1e332c;--muted:#56676e;--line:#dce2df;--wash:#f3f5f1;--teal:#125c4b;--control-h:38px;--field-min:190px;--row-gap:16px;--sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:"SFMono-Regular",Consolas,monospace}
+:root{--button-min:112px;--ink:#1e332c;--muted:#56676e;--line:#dce2df;--wash:#f3f5f1;--teal:#125c4b;--control-h:38px;--field-min:190px;--row-gap:16px;--sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:"SFMono-Regular",Consolas,monospace}
 
 *{box-sizing:border-box}
 body{margin:0;background:var(--wash);color:var(--ink);font:14px/1.48 var(--sans)}
@@ -11,6 +11,8 @@ button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{ou
 button:disabled{opacity:.35;cursor:default}
 button.primary{color:white;background:var(--teal);border-color:var(--teal)}
 :where(button:not(.block):not(.task-tile):not(.tab)){min-height:var(--control-h);white-space:nowrap}
+/* Action buttons share one minimum width so their size doesn't follow the label; icon-sized buttons stay compact. */
+:where(button:not(.block):not(.task-tile):not(.tab):not(.link):not(.project):not(.close):not(.arrow):not(.period button):not(.chip button)){min-width:var(--button-min);display:inline-flex;align-items:center;justify-content:center;gap:6px}
 .top{background:#193a36;color:#f7fffb}
 .bar,main{max-width:1440px;margin:auto;padding:0 clamp(16px,4.6vw,76px)}
 .bar{height:64px;display:flex;align-items:center;gap:14px}
