@@ -16,7 +16,7 @@ modules:
   scheduledTrigger:
     - key: relay-auto-refresh
       function: auto-refresh
-      interval: hour
+      interval: fiveMinute
   function:
     - key: resolver
       handler: index.handler

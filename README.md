@@ -51,7 +51,7 @@ MIT, free of charge. See [LICENSE](LICENSE).
 
 - Time is logged only in Jira (work logs). Reading a week costs one Jira request per issue with time logged that week.
 - Writes back to Jira only on request: work logs, assignee, due date. No status transitions.
-- Hourly automatic refresh uses the app's own Jira access; manual refresh uses the team manager's.
+- Automatic refresh every 5 minutes when Jira changed (and at least hourly) uses the app's own Jira access; manual refresh uses the team manager's.
 - Monday–Friday workweek, with public holidays and per-person working days and hours.
 - People, projects, systems and task types are archived, not deleted (the plan refers to them by position).
 - The plan lives in one storage key (~240 KB); saves from the same revision are guarded so only one wins.

@@ -25,8 +25,8 @@ The app is eligible for Atlassian's *Runs on Atlassian* program: it runs and sto
 - *Set Jira assignee* and *Set Jira due date* (team manager only) update that one issue.
 It never transitions issues or changes anything else. Jira's own permissions apply to every change.
 
-**Reading:** a team manager's *Refresh* reads issues with their own Jira access. An hourly automatic refresh reads the connected
-projects with the app's access, so the plan stays current. Project managers only see issue titles Jira lets them browse.
+**Reading:** a team manager's *Refresh* reads issues with their own Jira access. Every 5 minutes the app checks, with its own access, whether
+anything changed in the connected projects and refreshes the plan if so (and at least once an hour). Project managers only see issue titles Jira lets them browse.
 
 ## Who sees what
 

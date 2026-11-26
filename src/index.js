@@ -64,7 +64,7 @@ for (const name of ['getWorkspace', 'apply', 'pushToJira', 'getSettings', 'saveS
 
 export const handler = resolver.getDefinitions();
 
-/** Scheduled trigger (hourly). */
+/** Scheduled trigger (every 5 minutes). */
 export async function autoRefresh() {
   try {
     return await appService.autoRefresh();

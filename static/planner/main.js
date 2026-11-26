@@ -32,7 +32,7 @@ const weekRange = () => (M ? Object.fromEntries([['from', 0], ['to', 6]].map(([k
 const startBlocker = t => M.startBlocker(state, plan, t);
 const active = list => list.map((x, i) => [x, i]).filter(([x]) => !x.archived);
 
-async function load() {
+async function load(quiet = false) {
   try {
     const ws = await call('getWorkspace', { demo: demoCtx(), range: weekRange() });
     if (ws.notMember) return gate(ws.isAdmin);
@@ -40,8 +40,10 @@ async function load() {
     // The first request can't know the report week yet (it comes from the calendar), so fetch that week's entries once more.
     if (ws.range && ws.range.from !== weekRange().from) return load();
     render();
-  } catch (e) { fatal(e.message); }
+  } catch (e) { if (!quiet) fatal(e.message); }
 }
+// The backend refreshes from Jira every 5 minutes; pick that up without a manual reload, but never under an open dialog.
+setInterval(() => { if (booted && document.visibilityState === 'visible' && !$('modal').open && !busy) load(true); }, 5 * 60 * 1000);
 function gate(isAdmin) {
   document.querySelector('nav.tabs').hidden = document.querySelector('.hero').hidden = true;
   $('view').innerHTML = '<div class="gate"><h1>You are not on a Relay team yet</h1><p class="sub">' + (isAdmin ? 'Open Relay settings (Jira settings → Apps) to add yourself and your team.' : 'Ask a Jira administrator to add you in Relay settings.') + '</p></div>';

@@ -265,7 +265,23 @@ describe('service', () => {
     expect((await svc.handle('apply', ctx('ana'), { op: { kind: 'log', entry: { task: '', date: '2026-11-25', minutes: 30 } } })).error).toMatch(/internal-work issue/);
   });
 
-  it('refreshes from Jira every hour in live mode only', async () => {
+  it('refreshes every 5 minutes only when Jira changed, and at least hourly', async () => {
+    const store = await jiraStore(), plan = await store.get('plan'), now = Date.parse('2026-11-26T10:00:00Z');
+    await store.set('plan', { ...plan, refreshedAt: '2026-11-26T09:50:00Z' });
+    const issue = { id: '100', key: 'PA-1', fields: { project: { key: 'PA' }, summary: 'Changed', issuetype: { name: 'Task' }, components: [{ name: 'Integration' }] } };
+    let changed = false, queries = [];
+    const jira = { search: async ({ jql }) => (queries.push(jql), { issues: jql.includes('updated >=') && !changed ? [] : [issue], isLast: true }) };
+    const svc = createService({ store, jira, today: () => TODAY });
+    expect(await svc.autoRefresh(now)).toEqual({ skipped: true });
+    expect(queries).toEqual(['project in ("PA") AND updated >= -11m']);
+    changed = true;
+    expect(await svc.autoRefresh(now)).toEqual({ refreshed: true });
+    const later = Date.parse((await store.get('plan')).refreshedAt) + 61 * 60000;
+    changed = false;
+    expect(await svc.autoRefresh(later)).toEqual({ refreshed: true }); // hourly full refresh even without changes
+  });
+
+  it('refreshes from Jira in live mode only', async () => {
     expect(await createService({ store: memStore(), jira: {}, today: () => TODAY }).autoRefresh()).toEqual({ skipped: true }); // demo
     const store = await jiraStore();
     const jira = { search: async () => ({ issues: [{ id: '100', key: 'PA-1', fields: { project: { key: 'PA' }, summary: 'Renamed', issuetype: { name: 'Task' }, components: [{ name: 'Integration' }] } }], isLast: true }) };

@@ -15,7 +15,7 @@ It is made by Vedran Vukosav as a private individual ("the developer").
 ## What the app reads
 
 The app reads Jira issues from the projects an administrator connected: when a team manager presses *Refresh* (with that
-person's Jira access) and once an hour automatically (with the app's access). It reads issue key, summary, type, components,
+person's Jira access) and automatically every few minutes when issues changed (with the app's access). It reads issue key, summary, type, components,
 labels, assignee, original estimate, story points, issue links, time spent and resolution date. For timesheets it reads the
 work logs team members logged on those issues. When an administrator adds team members, the app searches Jira users by name.
 

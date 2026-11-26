@@ -410,10 +410,20 @@ export function createService({ store, jira, today = utcToday }) {
     return issues;
   }
 
-  /** Hourly job: refresh from Jira with the app's own access. Not reachable from the browser. */
-  async function autoRefresh() {
+  /**
+   * Scheduled job (every 5 minutes), with the app's own Jira access. Not reachable from the browser.
+   * A one-issue search checks whether anything changed since the last refresh; the full refresh runs only then,
+   * and at least hourly so deleted or moved issues (which an "updated" search can't see) also drop out.
+   */
+  async function autoRefresh(now = Date.now()) {
     const day = today(), { settings, state } = await load(day), active = activeProjects(settings);
     if (settings.demo || !jira || !active.length) return { skipped: true };
+    const minutes = Math.ceil((now - (Date.parse(state.refreshedAt ?? '') || 0)) / 60000);
+    if (minutes < 60) {
+      const scope = 'project in (' + active.map(p => '"' + p.jiraKey + '"').join(',') + ')';
+      const changed = await jira.search({ jql: scope + ' AND updated >= -' + (minutes + 1) + 'm', fields: ['id'], maxResults: 1 });
+      if (!changed.issues?.length) return { skipped: true };
+    }
     await doRefresh(settings, state, day, active, 'Automatic refresh');
     return { refreshed: true };
   }
