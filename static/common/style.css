@@ -71,7 +71,7 @@ main{padding-bottom:60px}
 .data td{border-bottom:1px solid #e9ede8}
 .data tr:last-child td{border:0}
 /* No text links: actions and item names that open something are buttons. */
-.link,.project{background:#fff;border:1px solid var(--line);border-radius:7px;padding:6px 12px;min-height:var(--control-h);color:var(--ink);font-weight:610;display:inline-flex;align-items:center;gap:8px;text-align:left;white-space:normal}
+.link,.project{background:#fff;border:1px solid var(--line);border-radius:7px;padding:6px 12px;min-height:var(--control-h);min-width:var(--button-min);color:var(--ink);font-weight:610;display:inline-flex;align-items:center;gap:8px;text-align:left;white-space:normal}
 .link:hover,.project:hover{border-color:#81958c}
 .dot{width:9px;height:9px;display:inline-block;background:var(--accent);border-radius:3px;flex-shrink:0}
 .status{font-size:12px;color:#355e4b}
