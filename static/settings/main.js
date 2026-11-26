@@ -24,10 +24,15 @@ const text = (path, value, attrs = '') => '<input data-path="' + path + '" value
 const num = (path, value, attrs = '') => '<input type="number" data-path="' + path + '" data-num value="' + esc(value) + '" ' + attrs + '>';
 const sel = (path, items, value, attrs = '') => '<select data-path="' + path + '" ' + attrs + '>' + opts(items, value) + '</select>';
 const bool = (path, value, label) => '<label><input type="checkbox" data-path="' + path + '" data-bool ' + (value ? 'checked' : '') + '> ' + label + '</label>';
-const field = (label, input, hint = '') => '<label class="field">' + label + input + (hint ? '<span class="hint">' + hint + '</span>' : '') + '</label>';
+// Every field is label / control / hint, so the CSS can line rows up regardless of text length.
+const field = (label, input, hint = '', cls = '') => '<label class="field ' + cls + '"><span class="field-label">' + label + '</span>' + input + '<span class="hint">' + hint + '</span></label>';
+// A field holding several controls (checkbox groups) must not be a <label>, or clicking its title toggles the first box.
+const group = (label, inner, hint = '', cls = '') => '<div class="field ' + cls + '"><span class="field-label">' + label + '</span>' + inner + '<span class="hint">' + hint + '</span></div>';
+const card = (head, body, archived) => '<div class="card' + (archived ? ' archived' : '') + '"><div class="card-head">' + head + '</div>' + body + '</div>';
 const many = (path, list, chosen) => '<div class="checks">' + list.map(([v, l]) => '<label><input type="checkbox" data-toggle="' + path + '" value="' + esc(v) + '" ' + (chosen.map(String).includes(String(v)) ? 'checked' : '') + '>' + esc(l) + '</label>').join('') + '</div>';
 const panel = (title, intro, body) => '<section class="panel"><div class="section-head"><div><h2>' + title + '</h2><p>' + intro + '</p></div></div><div class="content">' + body + '</div></section>';
-const table = (heads, rows) => '<div class="scroll"><table class="data"><thead><tr>' + heads.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>' + rows.join('') + '</tbody></table></div>';
+// rows are arrays of cell HTML; data-label lets phones show each row as a labelled block.
+const table = (heads, rows) => '<div class="scroll"><table class="data stack"><thead><tr>' + heads.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>' + rows.map(cells => '<tr>' + cells.map((c, k) => '<td data-label="' + esc(heads[k]) + '">' + c + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
 const systemsList = () => s.systems.map((n, i) => [i, n]);
 const peopleList = () => s.people.map((p, i) => [i, p.name + (p.archived ? ' (archived)' : '')]);
 
@@ -59,41 +64,57 @@ function render() {
     field('Minimum finished tasks', num('general.minSamples', g.minSamples, 'min="1" max="50"'), 'Needed before history is used.') +
     field('History window (months)', num('general.historyMonths', g.historyMonths, 'min="1" max="60"')) +
     field('Story points field', text('general.storyPointsField', g.storyPointsField, 'placeholder="customfield_10016"'), 'Jira field id, for types that use story points.') +
-    '<div class="field">History from Jira<div class="checks">' + bool('general.jiraHistory', g.jiraHistory, 'Use time spent on done Jira issues') + '</div></div>' +
+    group('History from Jira', '<div class="checks">' + bool('general.jiraHistory', g.jiraHistory, 'Use time spent on done Jira issues') + '</div>') +
     '</div><h3>System size levels</h3>' +
-    table(['Code', 'Name', 'Multiplier', 'Default'], s.sizes.map((z, i) => '<tr><td>' + text('sizes.' + i + '.id', z.id, 'maxlength="8"') + '</td><td>' + text('sizes.' + i + '.name', z.name) + '</td><td>' + num('sizes.' + i + '.multiplier', z.multiplier, 'step="0.05" min="0.1" max="10"') + '</td><td><input type="radio" name="defaultSize" data-default-size="' + esc(z.id) + '" ' + (s.defaultSize === z.id ? 'checked' : '') + '></td></tr>')) +
+    table(['Code', 'Name', 'Multiplier', 'Default'], s.sizes.map((z, i) => [text('sizes.' + i + '.id', z.id, 'maxlength="8"'), text('sizes.' + i + '.name', z.name), num('sizes.' + i + '.multiplier', z.multiplier, 'step="0.05" min="0.1" max="10"'), '<input type="radio" name="defaultSize" aria-label="Default size" data-default-size="' + esc(z.id) + '" ' + (s.defaultSize === z.id ? 'checked' : '') + '>'])) +
     '<button data-add="size">＋ Add size level</button><h3>Complexity factors</h3>' +
-    table(['Factor', 'Multiplier', 'Jira label that switches it on'], s.factors.map((f, i) => '<tr><td>' + text('factors.' + i + '.name', f.name) + '</td><td>' + num('factors.' + i + '.multiplier', f.multiplier, 'step="0.05" min="0.1" max="10"') + '</td><td>' + text('factors.' + i + '.label', f.label, 'placeholder="optional, e.g. vpn"') + '</td></tr>')) +
+    table(['Factor', 'Multiplier', 'Jira label'], s.factors.map((f, i) => [text('factors.' + i + '.name', f.name), num('factors.' + i + '.multiplier', f.multiplier, 'step="0.05" min="0.1" max="10"'), text('factors.' + i + '.label', f.label, 'placeholder="optional, e.g. vpn"')])) +
     '<button data-add="factor">＋ Add complexity factor</button><p class="hint">Turn factors on per project below, or per issue with the Jira label.</p>');
 
   const systems = panel('Systems', 'The skills a task needs. A Jira component with the same name sets the system of an issue.',
     '<div class="grid-form">' + s.systems.map((n, i) => field('System ' + (i + 1), text('systems.' + i, n))).join('') + '</div><button data-add="system">＋ Add system</button>');
 
-  const sources = [['relay', 'Relay estimate (history / size)'], ['jira-estimate', 'Jira original estimate'], ['story-points', 'Story points × hours']];
+  const sources = [['relay', 'Relay (history / size)'], ['jira-estimate', 'Jira estimate'], ['story-points', 'Story points']];
   const types = panel('Task types', 'Each type has a default effort and buffer, where its duration comes from, and the rules that match Jira issues to it. The first matching type wins. A type without rules is only used for tasks added in Relay.',
-    table(['Name', 'System', 'Base h', 'Buffer h', 'Duration from', 'h / point', 'Jira issue types', 'Components', 'Labels', ''], s.types.map((t, i) => '<tr class="' + (t.archived ? 'archived' : '') + '"><td>' + text('types.' + i + '.name', t.name, 'style="min-width:190px"') + '</td><td>' + sel('types.' + i + '.system', systemsList(), t.system, 'data-num style="min-width:120px"') + '</td><td>' + num('types.' + i + '.baseHours', t.baseHours, 'min="0.5" step="0.5"') + '</td><td>' + num('types.' + i + '.bufferHours', t.bufferHours, 'min="0" step="0.5"') + '</td><td>' + sel('types.' + i + '.source', sources, t.source, 'data-rerender style="min-width:190px"') + '</td><td>' + (t.source === 'story-points' ? num('types.' + i + '.hoursPerPoint', t.hoursPerPoint, 'min="0.25" step="0.25"') : '—') + '</td><td>' + text('types.' + i + '.issueTypes', t.issueTypes, 'placeholder="Task, Story"') + '</td><td>' + text('types.' + i + '.components', t.components, 'placeholder="any"') + '</td><td>' + text('types.' + i + '.labels', t.labels, 'placeholder="any"') + '</td><td>' + bool('types.' + i + '.archived', t.archived, 'Archived') + '</td></tr>')) +
+    s.types.map((t, i) => card(text('types.' + i + '.name', t.name, 'aria-label="Task type name"') + bool('types.' + i + '.archived', t.archived, 'Archived'), '<div class="grid-form">' +
+      field('System', sel('types.' + i + '.system', systemsList(), t.system, 'data-num')) +
+      field('Base hours', num('types.' + i + '.baseHours', t.baseHours, 'min="0.5" step="0.5"')) +
+      field('Buffer hours', num('types.' + i + '.bufferHours', t.bufferHours, 'min="0" step="0.5"')) +
+      field('Duration from', sel('types.' + i + '.source', sources, t.source, 'data-rerender')) +
+      field('Hours per story point', num('types.' + i + '.hoursPerPoint', t.hoursPerPoint, 'min="0.25" step="0.25"' + (t.source === 'story-points' ? '' : ' disabled')), t.source === 'story-points' ? '' : 'Only for story points') +
+      field('Jira issue types', text('types.' + i + '.issueTypes', t.issueTypes, 'placeholder="Task, Story"'), 'Comma-separated') +
+      field('Components', text('types.' + i + '.components', t.components, 'placeholder="any"'), 'Empty = any') +
+      field('Labels', text('types.' + i + '.labels', t.labels, 'placeholder="any"'), 'Empty = any') +
+      '</div>', t.archived)).join('') +
     '<button data-add="type">＋ Add task type</button>' + tryIt());
 
   const people = panel('People', s.demo ? 'The fictional demo team. In live mode you add Jira users here.' : 'Team members are Jira users. Role decides what they can see and change. Skills decide which systems they can cover.',
     (!s.demo ? '<div class="queue-tools"><label>Add a Jira user <input id="userQuery" placeholder="Name or email" autocomplete="off"></label><button id="userSearch">Search</button>' + (userResults.length ? sel('', userResults.map((u, i) => [i, u.name]), '', 'id="userPick"') + '<button id="userAdd">Add</button>' : '') + '</div>' : '<button data-add="person">＋ Add person</button>') +
-    table(['Name', 'Job title', 'Role', 'Skills', 'Projects (PM)', ''], s.people.map((p, i) => '<tr class="' + (p.archived ? 'archived' : '') + '"><td>' + text('people.' + i + '.name', p.name) + (p.accountId ? '<span class="hint">Jira user</span>' : '') + '</td><td>' + text('people.' + i + '.role', p.role) + '</td><td>' + sel('people.' + i + '.access', [['member', 'Team member'], ['team', 'Team manager'], ['pm', 'Project manager']], p.access, 'data-rerender') + '</td><td>' + many('people.' + i + '.skills', systemsList(), p.skills) + '</td><td>' + (p.access === 'pm' ? many('people.' + i + '.pmProjects', s.projects.map((x, j) => [j, x.name]), p.pmProjects) : '—') + '</td><td>' + bool('people.' + i + '.archived', p.archived, 'Archived') + '</td></tr>')));
+    s.people.map((p, i) => card(text('people.' + i + '.name', p.name, 'aria-label="Name"') + bool('people.' + i + '.archived', p.archived, 'Archived'), '<div class="grid-form">' +
+      field('Job title', text('people.' + i + '.role', p.role)) +
+      field('Role in Relay', sel('people.' + i + '.access', [['member', 'Team member'], ['team', 'Team manager'], ['pm', 'Project manager']], p.access, 'data-rerender')) +
+      field('Jira user', '<input disabled value="' + (p.accountId ? 'Linked' : 'Not linked') + '">') +
+      group('Skills', many('people.' + i + '.skills', systemsList(), p.skills), '', 'full') +
+      (p.access === 'pm' ? group('Projects they manage', many('people.' + i + '.pmProjects', s.projects.map((x, j) => [j, x.name]), p.pmProjects), '', 'full') : '') +
+      '</div>', p.archived)).join(''));
 
   const projects = panel('Projects', 'Each Relay project maps to one Jira project. The lead and backup cover the systems in their skills. Set the size of each system and the complexity that applies.',
     (!s.demo ? '<div class="queue-tools"><label>Connect a Jira project ' + sel('', [['', jiraProjects.length ? 'Choose…' : 'No Jira projects visible'], ...jiraProjects.filter(j => !s.projects.some(p => p.jiraKey === j.key)).map(j => [j.key, j.name + ' (' + j.key + ')'])], '', 'id="jiraPick"') + '</label><button id="jiraAdd">Connect</button></div>' : '<button data-add="project">＋ Add project</button>') +
     s.projects.map((p, i) => {
       const covered = [...new Set([...(s.people[p.lead]?.skills ?? []), ...(s.people[p.back]?.skills ?? [])])];
-      return '<div class="card ' + (p.archived ? 'archived' : '') + '"><div class="card-head">' + text('projects.' + i + '.name', p.name) + bool('projects.' + i + '.archived', p.archived, 'Archived') + '</div><div class="grid-form">' +
+      return card(text('projects.' + i + '.name', p.name, 'aria-label="Project name"') + bool('projects.' + i + '.archived', p.archived, 'Archived'), '<div class="grid-form">' +
         field('Jira project key', text('projects.' + i + '.jiraKey', p.jiraKey, 'placeholder="e.g. PILOT"')) +
         field('Due date', '<input type="date" data-path="projects.' + i + '.due" value="' + esc(p.due) + '">') +
         field('Lead', sel('projects.' + i + '.lead', [['', 'None'], ...peopleList()], p.lead, 'data-num data-rerender')) +
         field('Backup', sel('projects.' + i + '.back', [['', 'None'], ...peopleList()], p.back, 'data-num data-rerender')) +
-        '</div>' + field('Custom JQL (optional)', text('projects.' + i + '.jql', p.jql, 'placeholder="project = &quot;' + esc(p.jiraKey || 'KEY') + '&quot; AND statusCategory != Done ORDER BY Rank ASC"'), 'Leave empty for all open issues in the project.') +
-        '<h3>System size</h3><div class="grid-form">' + (covered.length ? covered.map(sy => field(esc(s.systems[sy]), sel('projects.' + i + '.sizes.' + sy, s.sizes.map(z => [z.id, z.name + ' ×' + z.multiplier]), p.sizes[sy] ?? s.defaultSize))).join('') : '<p class="hint">Choose a lead or backup with skills first.</p>') + '</div>' +
-        '<h3>Complexity</h3>' + many('projects.' + i + '.factors', s.factors.map(f => [f.id, f.name + ' ×' + f.multiplier]), p.factors) + '</div>';
+        field('Custom JQL (optional)', text('projects.' + i + '.jql', p.jql, 'placeholder="project = &quot;' + esc(p.jiraKey || 'KEY') + '&quot; AND statusCategory != Done ORDER BY Rank ASC"'), 'Leave empty for all open issues in the project.', 'full') +
+        (covered.length ? covered.map(sy => field('Size · ' + esc(s.systems[sy]), sel('projects.' + i + '.sizes.' + sy, s.sizes.map(z => [z.id, z.name + ' ×' + z.multiplier]), p.sizes[sy] ?? s.defaultSize))).join('') : group('System size', '<p class="hint">Choose a lead or backup with skills first.</p>', '', 'full')) +
+        group('Complexity', many('projects.' + i + '.factors', s.factors.map(f => [f.id, f.name + ' ×' + f.multiplier]), p.factors), '', 'full') +
+        '</div>', p.archived);
     }).join(''));
 
   const unmapped = s.demo ? '' : panel('Needs mapping', 'Jira issues from the last refresh that Relay could not plan. Fix a task type rule, a component, or a project contact, then refresh.',
-    meta.unmapped.length ? table(['Issue', 'Project', 'Reason'], meta.unmapped.map(u => '<tr><td><b>' + esc(u.key) + '</b> ' + esc(u.summary) + '</td><td>' + esc(u.project) + '</td><td>' + esc(u.reason) + '</td></tr>')) : '<p class="empty">Nothing to map.</p>');
+    meta.unmapped.length ? table(['Issue', 'Project', 'Reason'], meta.unmapped.map(u => ['<b>' + esc(u.key) + '</b> ' + esc(u.summary), esc(u.project), esc(u.reason)])) : '<p class="empty">Nothing to map.</p>');
 
   $('view').innerHTML = mode + unmapped + general + estimation + types + systems + people + projects;
 }

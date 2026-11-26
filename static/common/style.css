@@ -238,3 +238,62 @@ textarea{width:100%;font:inherit;border:1px solid #c7d1cb;border-radius:6px;padd
 .source{font-size:12px;color:var(--muted);margin:-6px 0 6px}
 .gate{max-width:560px;margin:60px auto;text-align:center}
 .error-panel{border:1px solid #e3c5b7;background:#fbf1ec;color:#7a3a1f;border-radius:10px;padding:16px 20px;margin:20px 0}
+
+/* ---- Layout system: sizes come from tokens, not from the text inside ---- */
+:root{--control-h:38px;--field-min:190px;--field-gap:6px;--row-gap:16px}
+input:not([type=checkbox]):not([type=radio]),select{height:var(--control-h);width:100%;min-width:0}
+textarea{width:100%;min-width:0}
+button:not(.block):not(.task-tile):not(.link):not(.project):not(.tab){min-height:var(--control-h);white-space:nowrap}
+.queue-tools select,.queue-tools input,.role select,#memberPreview,#filter,#pmProject{width:auto}
+/* Fields: label / control / hint rows line up across a row of fields (subgrid), whatever the label or hint length. */
+.formgrid,.grid-form{display:grid;column-gap:14px;row-gap:var(--row-gap);align-items:start}
+.grid-form{grid-template-columns:repeat(auto-fill,minmax(var(--field-min),1fr))}
+.field{display:grid;grid-row:span 3;grid-template-rows:subgrid;row-gap:var(--field-gap);align-content:start;min-width:0}
+.field .hint{margin:0;font-weight:450}
+.field.full,.formgrid>.full{grid-column:1/-1}
+.formgrid>.full:not(.field),.formgrid>.source{grid-row:span 1}
+/* Stats: label row and number row align across the three tiles. */
+.metrics{grid-template-rows:auto auto;row-gap:4px}
+.metrics>div{display:grid;grid-row:span 2;grid-template-rows:subgrid;align-content:space-between}
+/* Capacity cells: one line, same height. */
+.load-cell{height:34px;line-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.load-table td{min-width:96px}
+.data th{white-space:nowrap}
+.checks{min-height:var(--control-h);align-content:center}
+@media(max-width:700px){
+  :root{--row-gap:12px}
+  .grid-form{grid-template-columns:1fr}
+  .queue-tools{flex-wrap:wrap}
+  .metrics>div{padding:0 10px}
+  /* Editable tables become one labelled block per row. */
+  .data.stack,.data.stack tbody,.data.stack tr,.data.stack td{display:block;min-width:0;width:100%}
+  .data.stack{min-width:0}
+  .data.stack thead{display:none}
+  .data.stack tr{border-bottom:1px solid var(--line);padding:8px 0}
+  .data.stack td{border:0;padding:4px 0;display:grid;grid-template-columns:110px 1fr;align-items:center;gap:10px}
+  .data.stack td>input[type=radio]{justify-self:start;margin:0}
+  .data.stack td::before{content:attr(data-label);font:11px var(--mono);text-transform:uppercase;color:var(--muted)}
+}
+@media(max-width:700px){
+  /* Wide time grids still scroll sideways; keep the person column visible. */
+  .load-table td:first-child,.load-table th:first-child{position:sticky;left:0;z-index:1;background:#fff;box-shadow:1px 0 0 var(--line)}
+  .load-table th:first-child{background:#f8f9f6}
+  .board .who{position:sticky;left:0;z-index:2;background:#fff;box-shadow:1px 0 0 var(--line)}
+  .board .days>div:first-child{position:sticky;left:0;z-index:2;background:#f8f9f6}
+  .data.stack td:empty::before{content:none}
+  .panel>.scroll .data.stack tr{padding:8px 16px}
+  .data.stack .link{justify-self:start;text-align:left}
+}
+/* Calendar rows: names and titles stay on one line so every row is the same height. */
+.who>div{min-width:0}
+.who b,.who small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:700px){
+  .board .grid{grid-template-columns:128px repeat(5,minmax(0,1fr))}
+  .board .who{padding:10px 8px 10px 12px}
+  .board .who .avatar{display:none}
+}
+/* Subgrid keeps the parent's row gap inside fields, so spacing comes from margins instead of gaps. */
+.formgrid,.grid-form{row-gap:0}
+.field{row-gap:0;padding-bottom:var(--row-gap)}
+.field>input,.field>select,.field>textarea,.field>.checks{margin-top:6px}
+.field .hint:not(:empty){margin-top:5px}

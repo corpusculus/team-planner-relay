@@ -104,6 +104,12 @@ function render() {
   }
   const views = { home: personal ? memberHome : managerHome, queue: queueView, schedule: () => board() + (role === 'team' ? milestones() : ''), coverage, outlook: pmView, sheet: timesheetView, report: reportView, rules: rulesView };
   $('view').innerHTML = views[tab]();
+  // Phones show table rows as labelled blocks (CSS .stack); labels come from the header cells.
+  for (const table of $('view').querySelectorAll('table.data:not(.load-table)')) {
+    const heads = [...table.querySelectorAll('th')].map(th => th.textContent);
+    table.classList.add('stack');
+    for (const row of table.tBodies[0]?.rows ?? []) [...row.cells].forEach((td, i) => { td.dataset.label = heads[i] ?? ''; });
+  }
 }
 
 function board() {
