@@ -2,6 +2,8 @@ modules:
   jira:globalPage:
     - key: relay-planner
       title: Team Planner Relay
+      icon: resource:icons;relay.svg
+      layout: blank
       resource: planner
       resolver:
         function: resolver
@@ -19,6 +21,8 @@ resources:
     path: dist/planner
   - key: settings
     path: dist/settings
+  - key: icons
+    path: static/icons
 permissions:
   scopes:
     - read:jira-work
