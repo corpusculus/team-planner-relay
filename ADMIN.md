@@ -59,7 +59,7 @@ A sandbox or test site is a good first stop.
 
 1. Jira settings → Apps → **Team Planner Relay settings** → *Switch to live Jira data*.
 2. **People:** add the team (search by name), set each person's role and skills.
-3. **Projects:** connect one pilot project; choose its lead and backup.
+3. **Projects:** connect one pilot project; choose its lead, backup and project managers (people whose role is Project manager).
 4. **Task types:** check the rules that match Jira issue types or components to task types.
 5. Save, then press *Refresh from Jira now*. Issues that can't be matched are listed under *Needs mapping*.
 

@@ -87,7 +87,7 @@ const pageInfo = {
 
 function render() {
   const pm = role === 'pm', personal = role === 'member';
-  const pages = personal ? ['home', 'schedule', 'sheet', 'report', 'rules'] : pm ? ['outlook', 'report', 'rules'] : ['home', 'queue', 'schedule', 'coverage', 'report', 'rules'];
+  const pages = personal ? ['home', 'schedule', 'sheet', 'report', 'rules'] : pm ? ['outlook', 'schedule', 'report', 'rules'] : ['home', 'queue', 'schedule', 'coverage', 'report', 'rules'];
   if (!pages.includes(tab)) tab = pages[0];
   $('roleBox').hidden = !me.demo; $('role').value = role;
   $('memberPreview').hidden = !me.demo || !personal;
@@ -99,16 +99,16 @@ function render() {
   $('footnote').textContent = me.demo ? 'Demo portfolio · Fictional data · Switch to live mode in Relay settings' : 'Live plan · ' + (state.refreshedAt ? 'Jira refreshed ' + new Date(state.refreshedAt).toLocaleString('en-GB') : 'Not refreshed from Jira yet') + (state.unmapped.length && role === 'team' ? ' · ' + state.unmapped.length + ' Jira issues need mapping (see settings)' : '');
   $('simulate').hidden = !(role === 'team' && ['home', 'queue', 'schedule', 'coverage'].includes(tab) || personal && ['home', 'sheet', 'schedule'].includes(tab));
   $('simulate').textContent = personal ? (tab === 'schedule' ? 'Protect time' : '＋ Log time') : '＋ Test a change';
-  const title = tab === 'home' ? (personal ? 'My work' : 'Team overview') : tab === 'sheet' ? 'My timesheet' : tab === 'schedule' && personal ? 'My calendar' : tab === 'report' ? (personal ? 'My weekly report' : pm ? 'Project report' : 'Team report') : pageInfo[tab][0];
+  const title = tab === 'home' ? (personal ? 'My work' : 'Team overview') : tab === 'sheet' ? 'My timesheet' : tab === 'schedule' && personal ? 'My calendar' : tab === 'schedule' && pm ? 'Project calendar' : tab === 'report' ? (personal ? 'My weekly report' : pm ? 'Project report' : 'Team report') : pageInfo[tab][0];
   $('title').textContent = title;
   const counts = active(people).length + ' people across ' + active(projects).length + ' projects';
-  $('intro').textContent = tab === 'home' ? (personal ? who(member).name + ' · ' + (who(member).role || 'Team member') : counts + '. Review available capacity and work that needs a decision.') : tab === 'report' ? (pm ? 'Project hours and delivery outlook.' : personal ? 'A weekly summary of your recorded work.' : 'Weekly hours by person and project.') : (personal && tab === 'schedule' ? 'Your assignments, protected time, and troubleshooting reserves.' : pageInfo[tab][1]);
+  $('intro').textContent = tab === 'home' ? (personal ? who(member).name + ' · ' + (who(member).role || 'Team member') : counts + '. Review available capacity and work that needs a decision.') : tab === 'report' ? (pm ? 'Project hours and delivery outlook.' : personal ? 'A weekly summary of your recorded work.' : 'Weekly hours by person and project.') : (pm && tab === 'schedule' ? 'Who works on ' + (projects[pmProject]?.name ?? 'your project') + ' and when. Their other work shows as busy time.' : personal && tab === 'schedule' ? 'Your assignments, protected time, and troubleshooting reserves.' : pageInfo[tab][1]);
   for (const k of Object.keys(pageInfo)) {
     const btn = $(k + 'Tab'); btn.hidden = !pages.includes(k);
     if (k === 'home') btn.textContent = personal ? 'My work' : 'Overview';
     btn.classList.toggle('active', k === tab); btn.setAttribute('aria-current', k === tab ? 'page' : 'false');
   }
-  const views = { home: personal ? memberHome : managerHome, queue: queueView, schedule: () => board() + (role === 'team' ? milestones() : ''), coverage, outlook: pmView, sheet: timesheetView, report: reportView, rules: rulesView };
+  const views = { home: personal ? memberHome : managerHome, queue: queueView, schedule: () => (role === 'pm' ? pmHeader() + (projects[pmProject] ? board() : '') : board() + (role === 'team' ? milestones() : '')), coverage, outlook: pmView, sheet: timesheetView, report: reportView, rules: rulesView };
   $('view').innerHTML = views[tab]();
   // Phones show table rows as labelled blocks (CSS .stack); labels come from the header cells.
   for (const table of $('view').querySelectorAll('table.data:not(.load-table)')) {
@@ -119,9 +119,13 @@ function render() {
 }
 
 function board() {
+  // A project manager sees the people on their project; work on other projects only as busy time.
+  const pmMode = role === 'pm', pp = projects[pmProject];
+  const onProject = w => pp && (w === pp.lead || w === pp.back || state.tasks.some(t => t.p === pmProject && plan.get(t.id)?.who === w));
+  const busy = '<div class="block other" style="STYLE"><b>Other work</b><small>Busy</small></div>';
   const start = week * weekSlots, cols = weekSlots;
   const rows = people.map((p, w) => {
-    if (p.archived || (role === 'member' && w !== member)) return '';
+    if (p.archived || (role === 'member' && w !== member) || (role === 'pm' && !onProject(w))) return '';
     const blocks = [];
     function add(a, b, html) {
       if (b <= start || a >= start + cols) return;
@@ -133,6 +137,12 @@ function board() {
       for (let s = a; s < b; s++) { if (off(w, s)) continue; let e = s + 1; while (e < b && !off(w, e)) e++; add(s, e, html); s = e; }
     }
     for (const t of state.tasks) {
+      if (pmMode && t.p !== pmProject) {
+        for (const h of t.history || []) if (h.who === w) add(h.start, h.end, busy);
+        const x = plan.get(t.id);
+        if (x.who === w && Number.isFinite(x.start)) addWorking(x.start, x.end, busy);
+        continue;
+      }
       for (const h of t.history || []) if (h.who === w) add(h.start, h.end, '<button class="block done" data-task="' + t.id + '" style="STYLE' + color(t.p) + '"><b>' + esc(projects[t.p].name) + '</b><small>Worked · ' + esc(t.name) + '</small></button>');
       const x = plan.get(t.id);
       if (!Number.isFinite(x.start)) {
@@ -147,7 +157,7 @@ function board() {
       addWorking(x.start, workEnd, card((fixed ? 'meeting fixed ' : '') + (t.actual != null ? 'done' : ''), projects[t.p].name, label + t.name));
       if (workEnd < x.end) addWorking(workEnd, x.end, card('buffer', 'Buffer', projects[t.p].name + ' · ' + t.name));
     }
-    for (const block of state.privateTime.filter(x => x.who === w)) add(block.start, block.start + block.len, '<button class="block private" data-private="' + block.id + '" style="STYLE"><b>Private time</b><small>' + esc(block.name) + '</small></button>');
+    for (const block of state.privateTime.filter(x => x.who === w)) add(block.start, block.start + block.len, pmMode ? '<div class="block private" style="STYLE"><b>Unavailable</b><small>Private time</small></div>' : '<button class="block private" data-private="' + block.id + '" style="STYLE"><b>Private time</b><small>' + esc(block.name) + '</small></button>');
     const away = new Set();
     for (const l of state.leave.filter(l => l.who === w)) for (let d = l.start; d < l.start + l.len; d++) away.add(d);
     for (let d = start; d < start + cols; d++) { if (!away.has(d)) continue; let e = d + 1; while (e < start + cols && away.has(e)) e++; add(d, e, '<div class="block away" style="STYLE"><b>Time off</b><small>Unavailable</small></div>'); d = e - 1; }
@@ -205,7 +215,7 @@ function rulesView() {
 }
 
 function taskDetail(id) {
-  if (role === 'pm' || (role === 'member' && plan.get(id)?.who !== member)) return;
+  if ((role === 'pm' && !me.pmProjects.includes(state.tasks.find(t => t.id === id)?.p)) || (role === 'member' && plan.get(id)?.who !== member)) return;
   const t = state.tasks.find(t => t.id === id), x = plan.get(id), blocker = t.started ? '' : startBlocker(t);
   let actions = '';
   if (!t.started && !t.wait) actions = (role === 'team' ? '<button ' + (t.firstStart != null ? 'disabled' : '') + ' data-timing="' + id + '">' + (state.fixed.some(f => f.taskId === id) ? 'Edit fixed start' : 'Set a fixed start') + '</button>' : '') + '<button data-estimate="' + id + '">Edit estimate</button><button class="primary" data-start="' + id + '" ' + (blocker ? 'disabled' : '') + '>Start on ' + slotLabel(x.start) + '</button>';
@@ -213,6 +223,7 @@ function taskDetail(id) {
   if (t.started && t.actual == null) actions = '<button data-pause="' + id + '">Mark waiting</button><button data-revise="' + id + '">Update expected duration</button><button class="primary" data-finish="' + id + '">Record finish</button>';
   if (role === 'member' && (!timeInJira || t.key)) actions += '<button data-log-task="' + id + '">Log time</button>';
   if (role === 'team' && !me.demo && t.key && Number.isFinite(x.end)) actions += '<button data-push="assignee" data-push-task="' + id + '">Set Jira assignee to ' + esc(who(x.who).short) + '</button><button data-push="duedate" data-push-task="' + id + '">Set Jira due date to ' + fmt(x.end - 1) + '</button>';
+  if (role === 'pm') actions = ''; // read-only for project managers
   if (t.key) actions = '<button data-issue="' + esc(t.key) + '">Open ' + esc(t.key) + ' in Jira</button>' + actions;
   modal(projects[t.p].name + ' · ' + t.name, '<p class="note"><b>' + esc(who(x.who).name) + '</b> · ' + esc(systems[t.s]) + ' · ' + span(x.start, x.end - 1) + '<br>' + statusOf(t) + (t.gone ? ' · No longer in the Jira filter' : '') + '</p>' + (t.wait ? '<p class="wait-note"><b>Waiting for</b> ' + esc(t.wait.reason) + '</p>' : '') + '<p>Task type: ' + esc(types[t.type]?.name ?? '—') + '<br>Clear-sky effort: ' + hrs(t.work) + '<br>Original buffer: ' + hrs(t.buffer) + '<br>' + (t.actual != null ? 'Actual effort: ' + hrs(t.actual) : 'Current expected work: ' + hrs(effectiveWork(t)) + '<br>Buffer remaining: ' + hrs(duration(t) - effectiveWork(t))) + '</p><p class="source">Estimate: ' + esc(t.source || '—') + '</p><p>Qualified contacts: ' + (eligible(t).map(w => esc(people[w].name)).join(', ') || 'None') + '<br>Depends on: ' + esc((t.deps ?? []).map(d => state.tasks.find(z => z.id === d)?.name).filter(Boolean).join(', ') || 'Ready to start') + (t.assignee ? '<br>Jira assignee: ' + esc(t.assignee.name) + (assigneeNote(t, x) ? ' ⚠ differs from the plan' : '') : '') + '</p><div class="task-actions">' + (role === 'team' ? '<button data-project="' + t.p + '">View project</button>' : '') + actions + '</div>' + (blocker ? '<p class="sub">' + esc(blocker) + '</p>' : ''));
 }
@@ -345,6 +356,12 @@ function noteView(i) {
   const note = state.notes[i] || '';
   return '<h3>Shared project note</h3>' + (note ? '<p class="context-note">' + esc(note) + '</p>' : '') + '<button data-note="' + i + '">' + (note ? 'Edit note' : 'Add a note') + '</button>';
 }
+/** Project picker for project managers, shared by the outlook and calendar. */
+function pmHeader() {
+  const mine = me.pmProjects.filter(i => projects[i] && !projects[i].archived);
+  if (!mine.length) return '<p class="empty">No projects are assigned to you yet. Ask a Jira administrator to add them in Relay settings.</p>';
+  return '<div class="queue-tools"><label>Project <select id="pmProject">' + options(mine.map(i => [i, projects[i].name]), pmProject) + '</select></label><span class="sub">Contact · ' + esc(who(projects[pmProject]?.lead).name) + '</span></div>';
+}
 function pmView() {
   const p = projects[pmProject];
   if (!p) return '<p class="empty">No projects are assigned to you yet. Ask a Jira administrator to add them in Relay settings.</p>';
@@ -355,7 +372,7 @@ function pmView() {
   const risk = !Number.isFinite(forecast) ? 'Awaiting input' : forecast > p.due ? 'Forecast runs late' : 'On track';
   const tasks = state.tasks.filter(t => t.p === pmProject);
   const logged = logsThisWeek(reportWeek).filter(e => e.p === pmProject);
-  const header = '<div class="queue-tools"><label>Project <select id="pmProject">' + options(me.pmProjects.filter(i => projects[i] && !projects[i].archived).map(i => [i, projects[i].name]), pmProject) + '</select></label><span class="sub">Contact · ' + esc(who(p.lead).name) + '</span></div>';
+  const header = pmHeader();
   const outlook = '<section class="focus-card"><div class="focus-label">' + risk + '</div><div class="focus-content"><small>' + esc(p.name) + ' milestone</small><h2>' + fmt(forecast) + '</h2><p>Requested by ' + dueText(p) + (Number.isFinite(forecast) && forecast > p.due ? ' · ' + daysLate(forecast, p.due) + ' workdays beyond target' : '') + '</p></div></section>';
   const effort = '<section class="panel summary-card"><div class="section-head"><h2>Project time</h2><small>Week of ' + fmt(reportWeek * weekSlots) + '</small></div><div class="time-large">' + hours(sumTime(logged)) + '</div><div class="sub">Recorded on ' + esc(p.name) + '</div><button class="link" data-page="report">Open project report →</button></section>';
   return header + '<div class="dash-pair">' + outlook + effort + '</div><section class="panel"><div class="section-head"><h2>Delivery details</h2><span class="sub">' + tasks.filter(t => t.actual != null).length + ' of ' + tasks.length + ' tasks completed</span></div><div class="content"><h3>Fixed starts</h3>' + dates + (blockers ? '<h3>Help needed</h3>' + blockers : '') + noteView(pmProject) + '</div></section>';

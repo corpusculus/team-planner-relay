@@ -104,6 +104,7 @@ function render() {
   const projects = panel('Projects', 'Each Relay project maps to one Jira project. The lead and backup cover the systems in their skills. Set the size of each system and the complexity that applies.',
     (!s.demo ? '<div class="queue-tools"><label>Connect a Jira project ' + sel('', [['', jiraProjects.length ? 'Choose…' : 'No Jira projects visible'], ...jiraProjects.filter(j => !s.projects.some(p => p.jiraKey === j.key)).map(j => [j.key, j.name + ' (' + j.key + ')'])], '', 'id="jiraPick"') + '</label><button id="jiraAdd">Connect</button></div>' : '<button data-add="project">＋ Add project</button>') +
     s.projects.map((p, i) => {
+      const pms = s.people.map((x, j) => [x, j]).filter(([x]) => x.access === 'pm' && !x.archived);
       const covered = [...new Set([...(s.people[p.lead]?.skills ?? []), ...(s.people[p.back]?.skills ?? [])])];
       return card(text('projects.' + i + '.name', p.name, 'aria-label="Project name"') + bool('projects.' + i + '.archived', p.archived, 'Archived'), '<div class="grid-form">' +
         field('Jira project key', text('projects.' + i + '.jiraKey', p.jiraKey, 'placeholder="e.g. PILOT"')) +
@@ -112,6 +113,7 @@ function render() {
         field('Backup', sel('projects.' + i + '.back', [['', 'None'], ...peopleList()], p.back, 'data-num data-rerender')) +
         field('Custom JQL (optional)', text('projects.' + i + '.jql', p.jql, 'placeholder="project = &quot;' + esc(p.jiraKey || 'KEY') + '&quot; AND statusCategory != Done ORDER BY Rank ASC"'), 'Leave empty for all open issues in the project.', 'full') +
         (covered.length ? covered.map(sy => field('Size · ' + esc(s.systems[sy]), sel('projects.' + i + '.sizes.' + sy, s.sizes.map(z => [z.id, z.name + ' ×' + z.multiplier]), p.sizes[sy] ?? s.defaultSize))).join('') : group('System size', '<p class="hint">Choose a lead or backup with skills first.</p>', '', 'full')) +
+        group('Project managers', pms.length ? '<div class="checks">' + pms.map(([x, j]) => '<label><input type="checkbox" data-pm-of="' + i + '" value="' + j + '" ' + ((x.pmProjects ?? []).includes(i) ? 'checked' : '') + '>' + esc(x.name) + '</label>').join('') + '</div>' : '<p class="hint">Set someone’s role to Project manager under People first.</p>', 'They see this project’s outlook, calendar and report.', 'full') +
         group('Complexity', many('projects.' + i + '.factors', s.factors.map(f => [f.id, f.name + ' ×' + f.multiplier]), p.factors), '', 'full') +
         '</div>', p.archived);
     }).join(''));
@@ -176,6 +178,11 @@ document.addEventListener('change', e => {
   if (t.dataset.toggle) {
     const list = getPath(t.dataset.toggle), v = /^\d+$/.test(t.value) ? Number(t.value) : t.value;
     setPath(t.dataset.toggle, t.checked ? [...new Set([...list, v])] : list.filter(x => x !== v)); markDirty(); render();
+  }
+  if (t.dataset.pmOf !== undefined) {
+    const proj = Number(t.dataset.pmOf), person = s.people[Number(t.value)];
+    person.pmProjects = t.checked ? [...new Set([...(person.pmProjects ?? []), proj])] : (person.pmProjects ?? []).filter(x => x !== proj);
+    markDirty(); render();
   }
   if (t.dataset.defaultSize) { s.defaultSize = t.dataset.defaultSize; markDirty(); }
   if (t.tagName === 'SELECT' && t.dataset.path && t.dataset.rerender === undefined) render(); // keep estimate preview current
