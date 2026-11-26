@@ -1,7 +1,7 @@
 # Relay — note for the Jira administrator
 
 Relay is a team planning app for Jira Cloud, built on Atlassian Forge (Atlassian hosts and runs it; there is no external server).
-It was written by a team member as a private, free contribution. It is not a Marketplace app.
+It was written by a team member as a private, free contribution under the MIT license (see LICENSE). It is not a Marketplace app.
 
 ## What it does
 

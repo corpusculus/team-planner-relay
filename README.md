@@ -35,6 +35,10 @@ Estimation: Jira estimate or story points if the task type says so; otherwise P7
 (same project+system → same system → same type), buffer up to P90; otherwise type default × system size × complexity factors.
 Hours round up to slots (default 4h, so at most 2 tasks per person per day).
 
+## License
+
+MIT, free of charge. See [LICENSE](LICENSE).
+
 ## Known limits (v1)
 
 - Read-only on Jira: no assignment or status write-back, no worklog sync.
