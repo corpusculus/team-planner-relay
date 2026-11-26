@@ -109,7 +109,7 @@ function projectLink(i) { return '<button class="project" data-project="' + i + 
 function outlookText(d, p) { return !Number.isFinite(d) ? 'Waiting' : d > p.due ? daysLate(d, p.due) + ' workdays late' : 'On track'; }
 const pageInfo = {
   home: ['Overview', ''], sheet: ['Timesheet', 'Hours you have recorded against project tasks and internal work.'],
-  report: ['Weekly report', ''],
+  report: ['Report', ''],
   queue: ['Work queue', 'See what is underway, what can start next, and what needs a decision.'],
   schedule: ['Team calendar', 'Assignments, protected time, and buffers across the team.'],
   coverage: ['Project coverage', 'Primary contacts, backups, and the systems each person covers.'],
@@ -134,7 +134,7 @@ function render() {
   const title = tab === 'home' ? (personal ? 'My work' : 'Team overview') : tab === 'sheet' ? 'My timesheet' : tab === 'schedule' && personal ? 'My calendar' : tab === 'schedule' && pm ? 'Project calendar' : tab === 'report' ? (personal ? 'My weekly report' : pm ? 'Project report' : 'Team report') : pageInfo[tab][0];
   $('title').textContent = title;
   const counts = active(people).length + ' people across ' + active(projects).length + ' projects';
-  $('intro').textContent = tab === 'home' ? (personal ? who(member).name + ' · ' + (who(member).role || 'Team member') : counts + '. Review available capacity and work that needs a decision.') : tab === 'report' ? (pm ? 'Project hours and delivery outlook.' : personal ? 'A weekly summary of your recorded work.' : 'Weekly hours by person and project.') : (pm && tab === 'schedule' ? 'Who works on your projects and when, and where they are free. Their other work shows as busy time.' : personal && tab === 'schedule' ? 'Your assignments, protected time, and troubleshooting reserves.' : pageInfo[tab][1]);
+  $('intro').textContent = tab === 'home' ? (personal ? who(member).name + ' · ' + (who(member).role || 'Team member') : counts + '. Review available capacity and work that needs a decision.') : tab === 'report' ? (pm ? 'Project hours and delivery outlook for the chosen period.' : personal ? 'Your recorded work for the chosen period.' : 'Hours by person and project for the chosen period.') : (pm && tab === 'schedule' ? 'Who works on your projects and when, and where they are free. Their other work shows as busy time.' : personal && tab === 'schedule' ? 'Your assignments, protected time, and troubleshooting reserves.' : pageInfo[tab][1]);
   for (const k of Object.keys(pageInfo)) {
     const btn = $(k + 'Tab'); btn.hidden = !pages.includes(k);
     if (k === 'home') btn.textContent = personal ? 'My work' : 'Overview';
@@ -586,11 +586,22 @@ function timesheetView() {
     return [weekdayName(e.date), t ? esc(projects[t.p].name) + '<small class="meta-line">' + esc(t.name) + '</small>' : e.label ? esc(e.label) : 'Internal work', hours(e.minutes), esc(e.note || '—'), '<button data-entry="' + esc(e.id) + '">Edit</button>'];
   }), timeInJira ? 'No time logged in Jira in this period. Use Log time to add a work log.' : 'No time recorded in this period. Use Log time to add an entry.');
 }
+/** The period split into days (up to two weeks) or weeks (longer): [label, first ISO date, last ISO date]. */
+function periodBuckets() {
+  const days = Math.round((Date.parse(period.to) - Date.parse(period.from)) / DAY) + 1;
+  if (days <= 14) return Array.from({ length: days }, (_, i) => { const iso = isoAdd(period.from, i); return [weekdayName(iso), iso, iso]; });
+  const out = [];
+  for (let from = period.from; from <= period.to;) {
+    const to = [isoAdd(from, 6 - (weekday(from) + 6) % 7), period.to].sort()[0];
+    out.push(['Week of ' + weekdayName(from).replace(/^\w+ /, ''), from, to]);
+    from = isoAdd(to, 1);
+  }
+  return out;
+}
+const byDay = () => periodBuckets().length && periodBuckets()[0][1] === periodBuckets()[0][2];
+/** Total time per day or week of the period. */
 function dailyRows(entries) {
-  return Array.from({ length: Math.round((Date.parse(period.to) - Date.parse(period.from)) / DAY) + 1 }, (_, i) => {
-    const iso = isoAdd(period.from, i);
-    return [weekdayName(iso), hours(sumTime(entries.filter(e => e.date === iso)))];
-  });
+  return periodBuckets().map(([label, from, to]) => [label, hours(sumTime(entries.filter(e => e.date >= from && e.date <= to)))]);
 }
 function reportView() {
   const pm = role === 'pm', personal = role === 'member', entries = visibleEntries();
@@ -599,15 +610,23 @@ function reportView() {
     const bySystem = systems.map((system, i) => [system, sumTime(entries.filter(e => state.tasks.find(t => t.id === e.task)?.s === i))]).filter(([, n]) => n > 0).map(([system, n]) => [esc(system), hours(n)]);
     const current = finish(state, plan, pmProject), p = projects[pmProject];
     if (!p) return bar + '<p class="empty">No projects are assigned to you yet.</p>';
-    return bar + metrics([['Project hours', hours(sumTime(entries))], ['Current milestone forecast', fmt(current)], ['Requested milestone', dueText(p)]]) + tableBox('Time by system', ['System', 'Recorded time'], bySystem, 'No project hours recorded in this period.') + tableBox('Project time by day', ['Date', 'Logged project time'], dailyRows(entries), '') + '<button data-page="outlook">Open project outlook →</button>';
+    return bar + metrics([['Project hours', hours(sumTime(entries))], ['Current milestone forecast', fmt(current)], ['Requested milestone', dueText(p)]]) + tableBox('Time by system', ['System', 'Recorded time'], bySystem, 'No project hours recorded in this period.') + tableBox('Project time by ' + (byDay() ? 'day' : 'week'), [byDay() ? 'Date' : 'Week', 'Logged project time'], dailyRows(entries), '') + '<button data-page="outlook">Open project outlook →</button>';
   }
   const stats = metrics([['Recorded hours', hours(sumTime(entries))], ['Project work', hours(sumTime(entries.filter(e => e.p != null)))], ['Internal work', hours(sumTime(entries.filter(e => e.p == null)))]]);
   const groups = tableBox('Time by project', ['Project or category', 'Recorded time'], projectTotals(entries), 'No entries for this period.');
-  if (personal) return bar + stats + groups + tableBox('Daily totals', ['Date', 'Recorded time'], dailyRows(entries), '');
+  if (personal) return bar + stats + groups + tableBox('Time by ' + (byDay() ? 'day' : 'week'), [byDay() ? 'Date' : 'Week', 'Recorded time'], dailyRows(entries), '');
   return bar + stats + tableBox('Team time summary', ['Member', 'Project work', 'Internal work', 'Total'], active(people).map(([p, i]) => {
     const mine = entries.filter(e => e.who === i);
     return [esc(p.name), hours(sumTime(mine.filter(e => e.p != null))), hours(sumTime(mine.filter(e => e.p == null))), hours(sumTime(mine))];
-  }), '') + groups;
+  }), '') + groups + teamOverTime(entries);
+}
+/** Team report: each person's hours per day or week of the period, with totals. */
+function teamOverTime(entries) {
+  const buckets = periodBuckets(), team = active(people);
+  const sum = (list, [, from, to]) => sumTime(list.filter(e => e.date >= from && e.date <= to));
+  const rows = team.map(([p, i]) => { const mine = entries.filter(e => e.who === i); return [esc(p.name), ...buckets.map(b => (sum(mine, b) ? hours(sum(mine, b)) : '—')), '<b>' + hours(sumTime(mine)) + '</b>']; });
+  rows.push(['<b>Team</b>', ...buckets.map(b => '<b>' + hours(sum(entries, b)) + '</b>'), '<b>' + hours(sumTime(entries)) + '</b>']);
+  return tableBox('Time by ' + (byDay() ? 'day' : 'week'), ['Member', ...buckets.map(([label]) => label), 'Total'], rows, '');
 }
 function logForm(existing, taskId) {
   if (role !== 'member' || (existing && existing.who !== member)) return;
