@@ -225,7 +225,34 @@ function taskDetail(id) {
   if (role === 'team' && !me.demo && t.key && Number.isFinite(x.end)) actions += '<button data-push="assignee" data-push-task="' + id + '">Set Jira assignee to ' + esc(who(x.who).short) + '</button><button data-push="duedate" data-push-task="' + id + '">Set Jira due date to ' + fmt(x.end - 1) + '</button>';
   if (role === 'pm') actions = ''; // read-only for project managers
   if (t.key) actions = '<button data-issue="' + esc(t.key) + '">Open ' + esc(t.key) + ' in Jira</button>' + actions;
-  modal(projects[t.p].name + ' · ' + t.name, '<p class="note"><b>' + esc(who(x.who).name) + '</b> · ' + esc(systems[t.s]) + ' · ' + span(x.start, x.end - 1) + '<br>' + statusOf(t) + (t.gone ? ' · No longer in the Jira filter' : '') + '</p>' + (t.wait ? '<p class="wait-note"><b>Waiting for</b> ' + esc(t.wait.reason) + '</p>' : '') + '<p>Task type: ' + esc(types[t.type]?.name ?? '—') + '<br>Clear-sky effort: ' + hrs(t.work) + '<br>Original buffer: ' + hrs(t.buffer) + '<br>' + (t.actual != null ? 'Actual effort: ' + hrs(t.actual) : 'Current expected work: ' + hrs(effectiveWork(t)) + '<br>Buffer remaining: ' + hrs(duration(t) - effectiveWork(t))) + '</p><p class="source">Estimate: ' + esc(t.source || '—') + '</p><p>Qualified contacts: ' + (eligible(t).map(w => esc(people[w].name)).join(', ') || 'None') + '<br>Depends on: ' + esc((t.deps ?? []).map(d => state.tasks.find(z => z.id === d)?.name).filter(Boolean).join(', ') || 'Ready to start') + (t.assignee ? '<br>Jira assignee: ' + esc(t.assignee.name) + (assigneeNote(t, x) ? ' ⚠ differs from the plan' : '') : '') + '</p><div class="task-actions">' + (role === 'team' ? '<button data-project="' + t.p + '">View project</button>' : '') + actions + '</div>' + (blocker ? '<p class="sub">' + esc(blocker) + '</p>' : ''));
+  modal(t.name, taskCard(t, x, actions, blocker));
+}
+/** Visual task details: status, owner and dates, an effort bar, key numbers, people and prerequisites. */
+function taskCard(t, x, actions, blocker) {
+  const status = statusOf(t), owner = who(x.who), expected = effectiveWork(t), done = t.actual ?? spent(t);
+  const workLeft = t.actual != null ? 0 : Math.max(0, expected - spent(t)), bufferLeft = t.actual != null ? 0 : Math.max(0, duration(t) - expected);
+  const total = Math.max(1, done + workLeft + bufferLeft), pct = n => (100 * n / total).toFixed(1) + '%';
+  const days = Number.isFinite(x.start) ? new Set(Array.from({ length: x.end - x.start }, (_, k) => Math.floor((x.start + k) / spd))).size : 0;
+  const segments = [[done, 'spent', t.actual != null ? 'Actual' : 'Spent'], [workLeft, 'work', 'Work left'], [bufferLeft, 'buffer', 'Buffer left']];
+  const avatar = w => '<span class="avatar">' + esc(who(w).initials) + '</span>';
+  const deps = (t.deps ?? []).map(d => state.tasks.find(z => z.id === d)).filter(Boolean);
+  const label = text => '<div class="td-label">' + text + '</div>';
+  return '<div class="td" style="' + color(t.p) + '">' +
+    '<div class="td-head"><span class="td-status s-' + status.toLowerCase().replace(' ', '-') + '">' + status + '</span><span class="td-proj"><i class="dot"></i>' + esc(projects[t.p].name) + ' / ' + esc(systems[t.s]) + '</span>' + (t.key ? '<span class="tag">' + esc(t.key) + '</span>' : '') + (types[t.type] ? '<span class="tag">' + esc(types[t.type].name) + '</span>' : '') + '</div>' +
+    '<div class="td-when"><div class="td-owner">' + avatar(x.who) + '<div><b>' + esc(owner.name) + '</b><small>' + esc(owner.role || 'Planned owner') + '</small></div></div><div class="td-dates"><small>Forecast</small><b>' + span(x.start, x.end - 1) + '</b><small>' + (days ? days + ' workday' + (days === 1 ? '' : 's') : t.wait ? 'Paused' : 'After its prerequisites') + '</small></div></div>' +
+    (t.wait ? '<p class="wait-note"><b>Waiting for</b> ' + esc(t.wait.reason) + '</p>' : '') +
+    (t.gone ? '<p class="td-warn">No longer in the Jira filter.</p>' : '') +
+    (assigneeNote(t, x) ? '<p class="td-warn">⚠ Jira assignee is ' + esc(t.assignee.name) + ', the plan says ' + esc(owner.name) + '.</p>' : '') +
+    label('Effort') +
+    '<div class="effort-bar" role="img" aria-label="' + segments.map(([n, , l]) => l + ' ' + hrs(n)).join(', ') + '">' + segments.filter(([n]) => n > 0).map(([n, k]) => '<span class="seg seg-' + k + '" style="width:' + pct(n) + '"></span>').join('') + '</div>' +
+    '<div class="effort-legend">' + segments.map(([n, k, l]) => '<span><i class="seg-' + k + '"></i>' + l + ' ' + hrs(n) + '</span>').join('') + '</div>' +
+    '<div class="td-stats">' + [['Clear-sky effort', hrs(t.work)], ['Original buffer', hrs(t.buffer)], [t.actual != null ? 'Actual effort' : 'Expected work', hrs(t.actual ?? expected)], ['Buffer left', hrs(bufferLeft)]].map(([l, v]) => '<div><small>' + l + '</small><b>' + v + '</b></div>').join('') + '</div>' +
+    '<p class="source">Estimate: ' + esc(t.source || '—') + '</p>' +
+    label('Who can do it') + '<div class="chip-row">' + (eligible(t).map(w => '<span class="person-chip' + (w === x.who ? ' on' : '') + '">' + avatar(w) + esc(people[w].name) + '</span>').join('') || '<span class="sub">Nobody covers this system.</span>') + '</div>' +
+    label('Depends on') + '<div class="chip-row">' + (deps.map(d => '<span class="dep-chip' + (d.actual != null ? ' ok' : '') + '">' + (d.actual != null ? '✓ ' : '○ ') + esc(d.name) + '</span>').join('') || '<span class="sub">Nothing — ready when its owner is free.</span>') + '</div>' +
+    (t.assignee && !assigneeNote(t, x) ? '<p class="sub td-jira">Jira assignee: ' + esc(t.assignee.name) + '</p>' : '') +
+    '<div class="task-actions">' + (role === 'team' ? '<button data-project="' + t.p + '">View project</button>' : '') + actions + '</div>' +
+    (blocker ? '<p class="sub">' + esc(blocker) + '</p>' : '') + '</div>';
 }
 function projectDetail(i) {
   if (role !== 'team') return;

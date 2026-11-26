@@ -104,7 +104,7 @@ export function createModel(settings, todayIso) {
     Number.isFinite(s) ? cal.dateOf(Math.floor(s / spd)).toLocaleDateString('en-GB', { ...opts, timeZone: 'UTC' }) : 'Pending';
   const span = (a, b) => (!Number.isFinite(a) || !Number.isFinite(b) ? 'Pending' : Math.floor(a / spd) === Math.floor(b / spd) ? fmt(a) : fmt(a) + ' – ' + fmt(b));
   const clock = s => (spd > 1 ? ' ' + String(g.dayStartHour + (s % spd) * slotH).padStart(2, '0') + ':00' : '');
-  const slotLabel = s => fmt(s, { weekday: 'short', month: 'short', day: 'numeric' }) + clock(s);
+  const slotLabel = s => fmt(s, { weekday: 'short', month: 'short', day: 'numeric' }) + (Number.isFinite(s) ? clock(s) : '');
   const hrs = n => n * slotH + 'h';
   const daysLate = (d, due) => Math.ceil((d - due) / spd);
   const dueText = p => (Number.isFinite(p.due) ? fmt(p.due) : 'No date');
