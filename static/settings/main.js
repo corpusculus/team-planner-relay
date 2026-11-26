@@ -66,7 +66,7 @@ function render() {
     field('Workday starts at', num('general.dayStartHour', g.dayStartHour, 'min="0" max="23" step="1"'), 'Used for slot labels only.') +
     field('Planning start (a Monday)', '<input type="date" data-path="general.planStart" value="' + esc(g.planStart) + '">', 'Week 1 of the calendar. Workdays are Monday–Friday.') +
     field('Internal work issue', text('general.internalIssue', g.internalIssue ?? '', 'placeholder="e.g. ADMIN-12"'), 'Jira issue where time for non-project work is logged.') +
-    group('Public holidays', '<div class="link-row"><input type="date" id="holidayNew" aria-label="Holiday date"><button type="button" id="holidayAdd">Add holiday</button></div><div class="checks">' + (s.holidays ?? []).map((d, i) => '<span class="chip">' + esc(d) + '<button type="button" data-rm-holiday="' + i + '" aria-label="Remove ' + esc(d) + '">×</button></span>').join('') + '</div>', 'Nobody is planned on these days.', 'full') +
+    group('Public holidays', '<div class="holiday-editor"><div class="link-row"><input type="date" id="holidayNew" aria-label="Holiday date"><button type="button" id="holidayAdd">Add holiday</button></div><div class="checks">' + (s.holidays ?? []).map((d, i) => '<span class="chip">' + esc(d) + '<button type="button" data-rm-holiday="' + i + '" aria-label="Remove ' + esc(d) + '">×</button></span>').join('') + '</div></div>', 'Nobody is planned on these days.', 'full') +
     '</div>');
 
   const estimation = panel('Estimation', 'How Relay sizes a task. History wins when there is enough of it; otherwise the type default is scaled by system size and complexity.',
