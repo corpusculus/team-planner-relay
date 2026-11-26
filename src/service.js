@@ -179,11 +179,11 @@ export function createService({ store, jira, today = utcToday }) {
     return s;
   }
 
-  /** A date range of at most six weeks, defaulting to the week of `day`. */
+  /** A date range of at most 62 days (two months), defaulting to the week of `day`. */
   function rangeFor(range, day) {
     if (!range) return weekOf(day);
     const { from, to } = range;
-    if (!ISO.test(from) || !ISO.test(to) || to < from || Date.parse(to) - Date.parse(from) > 42 * DAY_MS) throw new UserError('Choose a valid period.');
+    if (!ISO.test(from) || !ISO.test(to) || to < from || Date.parse(to) - Date.parse(from) > 61 * DAY_MS) throw new UserError('Choose a valid period.');
     return { from, to };
   }
 

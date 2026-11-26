@@ -45,7 +45,7 @@ main{padding-bottom:60px}
 .tag{font:11px/1.3 var(--mono);padding:4px 7px;border-radius:5px;background:#eef2ec;color:#476451}
 .scroll{overflow-x:auto}
 .board{min-width:750px}
-.grid{display:grid;grid-template-columns:175px repeat(5,minmax(0,1fr))}
+.grid{display:grid;grid-template-columns:175px repeat(var(--days,5),minmax(0,1fr))}
 .days{background:#f8f9f6;color:var(--muted);font:11px var(--mono);text-transform:uppercase;letter-spacing:.5px;border-block:1px solid var(--line)}
 .days div{padding:10px 13px}
 .days div:first-child{padding-left:21px}
@@ -57,7 +57,7 @@ main{padding-bottom:60px}
 .who b,.who small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .who small{font-size:11px;color:var(--muted)}
 .avatar{border-radius:50%;display:inline-grid;place-items:center;width:30px;height:30px;flex-shrink:0;background:#eef2eb;color:#506454;font-size:11px;font-weight:700}
-.lane{grid-column:2/7;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));background:repeating-linear-gradient(to right,var(--line) 0 1px,transparent 1px 20%);align-items:stretch}
+.lane{grid-column:2/-1;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));background:repeating-linear-gradient(to right,var(--line) 0 1px,transparent 1px calc(100% / var(--days,5)));align-items:stretch}
 .block{margin:7px 3px 7px 5px;padding:6px 8px;text-align:left;border:none;border-left:3px solid var(--accent);border-radius:5px;min-width:0;background:var(--tint);color:var(--fg);overflow:hidden}
 .block:hover{filter:brightness(.96)}
 .block b,.block small{display:block;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
@@ -273,7 +273,7 @@ textarea{width:100%;min-width:0;font:inherit;border:1px solid #c7d1cb;border-rad
   /* Wide time grids still scroll sideways; keep the person column visible. */
   .load-table td:first-child,.load-table th:first-child{position:sticky;left:0;z-index:1;background:#fff;box-shadow:1px 0 0 var(--line)}
   .load-table th:first-child{background:#f8f9f6}
-  .board .grid{grid-template-columns:128px repeat(5,minmax(0,1fr))}
+  .board .grid{grid-template-columns:128px repeat(var(--days,5),minmax(0,1fr))}
   .board .who{position:sticky;left:0;z-index:2;background:#fff;box-shadow:1px 0 0 var(--line);padding:10px 8px 10px 12px}
   .board .who .avatar{display:none}
   .board .days>div:first-child{position:sticky;left:0;z-index:2;background:#f8f9f6}
@@ -316,4 +316,7 @@ textarea{width:100%;min-width:0;font:inherit;border:1px solid #c7d1cb;border-rad
 .td .task-actions{margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}
 .task-actions .primary{margin-left:auto}
 @media(max-width:700px){.td-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.td-when{flex-wrap:wrap}.td-dates{text-align:left}}
-
+/* Period switch: day / week / month / custom */
+.period-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.period-bar select,.period-bar input[type=date]{width:auto}
+.period b{min-width:150px;text-align:center}

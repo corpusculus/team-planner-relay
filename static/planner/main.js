@@ -11,9 +11,9 @@ let settings, today, me, M, people, projects, systems, types, state, plan;
 let fmt, span, slotLabel, hrs, daysLate, dueText, who, effectiveWork, duration, spent, statusOf, eligible, finish, off, take;
 let spd, slotH, weekSlots, timeInJira = false;
 // View state
-let role = 'member', pmProject = 0, member = 2, reportWeek = 0;
+let role = 'member', pmProject = 0, member = 2;
 try { const last = sessionStorage.getItem('relay.preview.role'); if (['member', 'team', 'pm'].includes(last)) role = last; const w = sessionStorage.getItem('relay.preview.member'); if (w !== null) member = Number(w); } catch {}
-let week = 0, pmCal = 'all', personFilter = 'all', tab = role === 'pm' ? 'outlook' : 'home', filter = 'all', showAll = false, draft = null, formValues = null, busy = false, booted = false;
+let period = null, pmCal = 'all', personFilter = 'all', tab = role === 'pm' ? 'outlook' : 'home', filter = 'all', showAll = false, draft = null, formValues = null, busy = false, booted = false;
 
 function useWorkspace(ws) {
   settings = ws.settings; today = ws.today; me = ws.me; state = ws.state;
@@ -24,21 +24,53 @@ function useWorkspace(ws) {
   if (!people[member]) member = 0;
   plan = M.schedule(state);
   timeInJira = !!ws.timeInJira;
-  if (!booted) { booted = true; week = reportWeek = Math.floor(M.now / weekSlots); tab = role === 'pm' ? 'outlook' : 'home'; }
+  if (!booted) { booted = true; setPeriod('week', anchorDay()); tab = role === 'pm' ? 'outlook' : 'home'; }
 }
 const demoCtx = () => ({ role, member });
-/** Monday–Sunday of the report week; the backend only sends timesheet entries for the period asked for. */
-const weekRange = () => (M ? Object.fromEntries([['from', 0], ['to', 6]].map(([k, d]) => [k, new Date(M.cal.epoch + (reportWeek * 7 + d) * 86400000).toISOString().slice(0, 10)])) : undefined);
+// ---- Period shown by every calendar, timesheet and report: a day, week, month or custom range (ISO dates) ----
+const DAY = 86400000, MAX_DAYS = 62;
+const isoAdd = (iso, n) => new Date(Date.parse(iso + 'T00:00:00Z') + n * DAY).toISOString().slice(0, 10);
+const weekday = iso => new Date(iso + 'T00:00:00Z').getUTCDay();
+const anchorDay = () => (today < settings.general.planStart ? settings.general.planStart : today);
+function setPeriod(mode, anchor) {
+  if (mode === 'day') { let d = anchor; while (weekday(d) % 6 === 0) d = isoAdd(d, 1); period = { mode, from: d, to: d }; }
+  else if (mode === 'month') { const [y, m] = anchor.split('-').map(Number); period = { mode, from: new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10), to: new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10) }; }
+  else { const monday = isoAdd(anchor, -((weekday(anchor) + 6) % 7)); period = { mode: 'week', from: monday, to: isoAdd(monday, 6) }; }
+}
+function shiftPeriod(dir) {
+  const { mode, from, to } = period;
+  if (mode === 'day') { let d = isoAdd(from, dir); while (weekday(d) % 6 === 0) d = isoAdd(d, dir); setPeriod('day', d); }
+  else if (mode === 'week') setPeriod('week', isoAdd(from, 7 * dir));
+  else if (mode === 'month') { const [y, m] = from.split('-').map(Number); setPeriod('month', new Date(Date.UTC(y, m - 1 + dir, 1)).toISOString().slice(0, 10)); }
+  else { const len = (Date.parse(to) - Date.parse(from)) / DAY + 1; period = { mode, from: isoAdd(from, len * dir), to: isoAdd(to, len * dir) }; }
+}
+const periodRange = () => (period ? { from: period.from, to: period.to } : undefined);
+/** First and last workday index of the period (empty when last < first). */
+const periodDays = () => [M.cal.dayIndex(period.from, true), M.cal.dayIndex(period.to)];
+const inPeriod = iso => iso >= period.from && iso <= period.to;
+function periodLabel() {
+  const d = (iso, o) => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-GB', { ...o, timeZone: 'UTC' });
+  if (period.mode === 'day') return d(period.from, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  if (period.mode === 'month') return d(period.from, { month: 'long', year: 'numeric' });
+  return d(period.from, { day: 'numeric', month: 'short' }) + ' – ' + d(period.to, { day: 'numeric', month: 'short' });
+}
+/** Day / week / month / custom switch with previous, next and today. */
+function periodPicker() {
+  return '<div class="period-bar"><select id="periodMode" aria-label="Period">' + options([['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['custom', 'Custom']], period.mode) + '</select>' +
+    (period.mode === 'custom'
+      ? '<input type="date" id="periodFrom" aria-label="From" value="' + period.from + '"><input type="date" id="periodTo" aria-label="To" value="' + period.to + '"><button id="periodApply">Show</button>'
+      : '<div class="period"><button class="arrow" data-shift="-1" aria-label="Previous">‹</button><b>' + periodLabel() + '</b><button class="arrow" data-shift="1" aria-label="Next">›</button></div><button id="periodToday">Today</button>') + '</div>';
+}
 const startBlocker = t => M.startBlocker(state, plan, t);
 const active = list => list.map((x, i) => [x, i]).filter(([x]) => !x.archived);
 
 async function load(quiet = false) {
   try {
-    const ws = await call('getWorkspace', { demo: demoCtx(), range: weekRange() });
+    const ws = await call('getWorkspace', { demo: demoCtx(), range: periodRange() });
     if (ws.notMember) return gate(ws.isAdmin);
     useWorkspace(ws);
-    // The first request can't know the report week yet (it comes from the calendar), so fetch that week's entries once more.
-    if (ws.range && ws.range.from !== weekRange().from) return load();
+    // The first request can't know the period yet (it comes from the calendar), so fetch that period's entries once more.
+    if (ws.range && (ws.range.from !== period.from || ws.range.to !== period.to)) return load();
     render();
   } catch (e) { if (!quiet) fatal(e.message); }
 }
@@ -55,7 +87,7 @@ async function send(op, message = 'Change applied. The schedule and milestone fo
   if (busy) return;
   busy = true;
   try {
-    const ws = await call('apply', { op, demo: demoCtx(), opId: crypto.randomUUID(), range: weekRange() });
+    const ws = await call('apply', { op, demo: demoCtx(), opId: crypto.randomUUID(), range: periodRange() });
     useWorkspace(ws);
     if ($('modal').open) $('modal').close();
     render();
@@ -123,7 +155,7 @@ function board() {
   const pmMode = role === 'pm', mine = pmMode ? (pmCal === 'all' ? me.pmProjects : [Number(pmCal)]) : [];
   const onProject = w => mine.some(i => projects[i] && (w === projects[i].lead || w === projects[i].back)) || state.tasks.some(t => mine.includes(t.p) && plan.get(t.id)?.who === w);
   const busy = '<div class="block other" style="STYLE"><b>Other work</b><small>Busy</small></div>';
-  const start = week * weekSlots, cols = weekSlots;
+  const [d0, d1] = periodDays(), days = Math.max(0, d1 - d0 + 1), start = d0 * spd, cols = days * spd;
   const rows = people.map((p, w) => {
     if (p.archived || (role === 'member' && w !== member) || (role === 'pm' && !onProject(w))) return '';
     const blocks = [];
@@ -163,13 +195,14 @@ function board() {
     for (let d = start; d < start + cols; d++) { if (!away.has(d)) continue; let e = d + 1; while (e < start + cols && away.has(e)) e++; add(d, e, '<div class="block away" style="STYLE"><b>Time off</b><small>Unavailable</small></div>'); d = e - 1; }
     for (let d = start; d < start + cols; d++) { if (!off(w, d)) continue; let e = d + 1; while (e < start + cols && off(w, e)) e++; add(d, e, '<div class="block away" style="STYLE"><b>' + (M.isHoliday(d) ? 'Holiday' : 'Not working') + '</b><small>' + (M.isHoliday(d) ? 'Public holiday' : 'Outside working hours') + '</small></div>'); d = e - 1; }
     // Free time from now on, so managers can see where a task fits; clicking it starts "Add a task" there.
-    const load = role === 'member' ? [] : loadSlots(week, w).map((k, i) => (k === 'free' && start + i >= M.now ? 'free' : k));
+    const load = role === 'member' ? [] : loadSlots(start, cols, w).map((k, i) => (k === 'free' && start + i < M.now ? 'past' : k));
     for (let d = 0; d < load.length; d++) { if (load[d] !== 'free') continue; let e = d + 1; while (e < load.length && load[e] === 'free') e++; add(start + d, start + e, '<button class="block free" data-free-who="' + w + '" data-free-start="' + (start + d) + '" data-free-hours="' + (e - d) * slotH + '" style="STYLE" title="Add a task here"><b>Free · ' + (e - d) * slotH + 'h</b><small>Add a task</small></button>'); d = e - 1; }
     const freeHours = load.filter(k => k === 'free').length * slotH;
-    return '<div class="person grid"><div class="who"><span class="avatar">' + esc(p.initials) + '</span><div><b>' + esc(p.name) + '</b><small>' + (role === 'member' ? esc(p.role || '') : '<span class="free-h">' + freeHours + 'h free this week</span>') + '</small></div></div><div class="lane" style="grid-template-columns:repeat(' + cols + ',minmax(0,1fr))">' + blocks.join('') + '</div></div>';
+    return '<div class="person grid"><div class="who"><span class="avatar">' + esc(p.initials) + '</span><div><b>' + esc(p.name) + '</b><small>' + (role === 'member' ? esc(p.role || '') : '<span class="free-h">' + freeHours + 'h free</span>') + '</small></div></div><div class="lane" style="grid-template-columns:repeat(' + cols + ',minmax(0,1fr))">' + blocks.join('') + '</div></div>';
   }).join('');
-  const nowWeek = Math.floor(M.now / weekSlots);
-  return '<section class="panel"><div class="section-head"><div class="row"><h2>' + span(start, start + cols - 1) + '</h2><span class="tag">' + (week === nowWeek ? 'Planning week' : week < nowWeek ? 'Past week' : 'Forecast week') + '</span></div><div class="controls"><button class="arrow" id="prev" aria-label="Previous week" ' + (week === 0 ? 'disabled' : '') + '>‹</button><button id="first">This week</button><button class="arrow" id="next" aria-label="Next week" ' + (week >= endWeek() ? 'disabled' : '') + '>›</button></div></div><div class="scroll"><div class="board"><div class="grid days"><div>Team member</div>' + Array.from({ length: 5 }, (_, i) => '<div>' + fmt(start + i * spd, { weekday: 'short', day: 'numeric' }) + (M.isHoliday(start + i * spd) ? ' · Holiday' : '') + '</div>').join('') + '</div>' + rows + '</div></div><div class="foot"><span>Striped task buffers reserve time for troubleshooting · ' + slotH + 'h slots</span><span>Week ' + (week + 1) + ' of ' + (endWeek() + 1) + '</span></div></section>';
+  const head = '<div class="section-head"><div class="row"><h2>' + periodLabel() + '</h2>' + (start <= M.now && M.now < start + cols ? '<span class="tag">Now</span>' : '') + '</div>' + periodPicker() + '</div>';
+  if (!days) return '<section class="panel">' + head + '<p class="empty">No workdays in this period.</p></section>';
+  return '<section class="panel">' + head + '<div class="scroll"><div class="board" style="--days:' + days + ';min-width:' + Math.max(750, 175 + days * (days > 10 ? 84 : 110)) + 'px"><div class="grid days"><div>Team member</div>' + Array.from({ length: days }, (_, i) => '<div>' + fmt(start + i * spd, { weekday: 'short', day: 'numeric' }) + (M.isHoliday(start + i * spd) ? ' · Holiday' : '') + '</div>').join('') + '</div>' + rows + '</div></div><div class="foot"><span>Striped task buffers reserve time for troubleshooting · ' + slotH + 'h slots</span></div></section>';
 }
 
 function milestones() {
@@ -300,16 +333,16 @@ function changeForm(v = {}) {
     const est = s == null ? null : estimate(settings, { type, p, s }, state.completed, today);
     const estHours = est ? Math.max(1, toSlots(est.hours, slotH)) * slotH : slotH, estBuffer = est ? toSlots(est.buffer, slotH) * slotH : 0;
     fields += selectField('Task type', 'type', typeList.map(([a, i]) => [i, a.name]), type, true);
-    fields += '<label class="field full">Task name<input required maxlength="70" name="name" value="' + esc(v.name ?? (kind === 'urgent' ? 'Urgent ' + types[type].name.toLowerCase() : types[type].name)) + '"></label>' + selectField('Project', 'p', active(projects).filter(([, i]) => role !== 'pm' || me.pmProjects.includes(i)).map(([x, i]) => [i, x.name]), p) + selectField('System', 's', sys.map(x => [x, systems[x]]), s) + selectField('Earliest start', 'start', dates, v.start ?? Math.max(week * weekSlots, M.now)) + hourInput('Clear-sky hours', 'hours', v.keepHours ? v.hours : estHours, slotH) + hourInput('Buffer hours', 'buffer', v.keepHours ? v.buffer : estBuffer, 0) + (v.prefer != null && v.prefer !== '' ? '<input type="hidden" name="prefer" value="' + esc(v.prefer) + '"><input type="hidden" name="fit" value="' + esc(v.fit ?? '') + '"><p class="source full">Preferred owner: ' + esc(who(Number(v.prefer)).name) + ', from ' + slotLabel(Number(v.start)) + '</p>' + (v.fit && estHours + estBuffer > Number(v.fit) ? '<p class="td-warn full">This free time holds ' + v.fit + 'h, but the task needs ' + (estHours + estBuffer) + 'h with buffer. Work is planned as one block, so it will start later. Shorten it to fit, or check the preview.</p>' : '') : '') + '<input type="hidden" name="source" value="' + esc(est?.source ?? '') + '"><input type="hidden" name="estHours" value="' + estHours + '"><p class="source full">' + (est ? 'Suggested: ' + estHours + 'h + ' + estBuffer + 'h buffer · ' + esc(est.source) : 'Nobody on this project covers a system yet.') + '</p>';
+    fields += '<label class="field full">Task name<input required maxlength="70" name="name" value="' + esc(v.name ?? (kind === 'urgent' ? 'Urgent ' + types[type].name.toLowerCase() : types[type].name)) + '"></label>' + selectField('Project', 'p', active(projects).filter(([, i]) => role !== 'pm' || me.pmProjects.includes(i)).map(([x, i]) => [i, x.name]), p) + selectField('System', 's', sys.map(x => [x, systems[x]]), s) + selectField('Earliest start', 'start', dates, v.start ?? Math.max(periodDays()[0] * spd, M.now)) + hourInput('Clear-sky hours', 'hours', v.keepHours ? v.hours : estHours, slotH) + hourInput('Buffer hours', 'buffer', v.keepHours ? v.buffer : estBuffer, 0) + (v.prefer != null && v.prefer !== '' ? '<input type="hidden" name="prefer" value="' + esc(v.prefer) + '"><input type="hidden" name="fit" value="' + esc(v.fit ?? '') + '"><p class="source full">Preferred owner: ' + esc(who(Number(v.prefer)).name) + ', from ' + slotLabel(Number(v.start)) + '</p>' + (v.fit && estHours + estBuffer > Number(v.fit) ? '<p class="td-warn full">This free time holds ' + v.fit + 'h, but the task needs ' + (estHours + estBuffer) + 'h with buffer. Work is planned as one block, so it will start later. Shorten it to fit, or check the preview.</p>' : '') : '') + '<input type="hidden" name="source" value="' + esc(est?.source ?? '') + '"><input type="hidden" name="estHours" value="' + estHours + '"><p class="source full">' + (est ? 'Suggested: ' + estHours + 'h + ' + estBuffer + 'h buffer · ' + esc(est.source) : 'Nobody on this project covers a system yet.') + '</p>';
   }
   if (kind === 'private') {
     const block = state.privateTime.find(b => b.id === v.blockId);
     fields += (block ? '<input type="hidden" name="blockId" value="' + esc(block.id) + '">' : '') +
       '<label class="field full">Private work label<input name="name" maxlength="70" required value="' + esc(v.name ?? 'Focus time') + '"></label>' +
       (role === 'member' ? '' : selectField('Team member', 'who', active(people).map(([x, i]) => [i, x.name]), v.who ?? 0, true)) +
-      selectField('First protected slot', 'start', dates, v.start ?? Math.max(week * weekSlots, M.now)) + selectField('Duration', 'hours', hourChoices, v.hours ?? (v.len ? v.len * slotH : settings.general.workdayHours));
+      selectField('First protected slot', 'start', dates, v.start ?? Math.max(periodDays()[0] * spd, M.now)) + selectField('Duration', 'hours', hourChoices, v.hours ?? (v.len ? v.len * slotH : settings.general.workdayHours));
   }
-  if (kind === 'leave') fields += selectField('Team member', 'who', active(people).map(([x, i]) => [i, x.name]), v.who ?? 0, true) + selectField('First day away', 'start', dayDates, v.start ?? Math.max(week * weekSlots, M.now)) + selectField('Time away', 'days', dayChoices, v.days ?? 2);
+  if (kind === 'leave') fields += selectField('Team member', 'who', active(people).map(([x, i]) => [i, x.name]), v.who ?? 0, true) + selectField('First day away', 'start', dayDates, v.start ?? Math.max(periodDays()[0] * spd, M.now)) + selectField('Time away', 'days', dayChoices, v.days ?? 2);
   if (kind === 'extend') fields += selectField('Task', 'taskId', state.tasks.filter(t => t.actual == null).map(t => [t.id, projects[t.p].name + ' · ' + t.name]), v.taskId, true) + selectField('Additional expected hours', 'hours', hourChoices, v.hours ?? slotH, true);
   const adding = role === 'pm' || v.prefer != null;
   modal(adding ? 'Add a task' : 'Test a change', '<p>' + (adding ? 'Preview where it lands and what it moves before you apply it.' : 'Preview the effect on the published schedule. You decide whether to apply it.') + '</p><form id="changeForm"><div class="formgrid">' + fields + '</div>' + footer + '</form>');
@@ -333,7 +366,7 @@ function preview(v) {
 async function pushToJira(taskId, field) {
   if (busy) return;
   busy = true;
-  try { useWorkspace(await call('pushToJira', { taskId, field, range: weekRange() })); $('modal').close(); render(); announce(field === 'assignee' ? 'Jira assignee updated.' : 'Jira due date updated.'); }
+  try { useWorkspace(await call('pushToJira', { taskId, field, range: periodRange() })); $('modal').close(); render(); announce(field === 'assignee' ? 'Jira assignee updated.' : 'Jira due date updated.'); }
   catch (e) { modal('Jira was not updated', '<p>' + esc(e.message) + '</p><div class="actions"><button data-dismiss>Close</button></div>'); }
   finally { busy = false; }
 }
@@ -346,7 +379,7 @@ $('reset').onclick = () => modal('Reset sample plan?', '<p>This restores the ori
 $('settingsLink').onclick = () => { location.href = '../settings/'; };
 $('refresh').onclick = async () => {
   $('refresh').disabled = true; announce('Reading Jira…');
-  try { useWorkspace(await call('refresh', { range: weekRange() })); render(); announce('Refreshed from Jira.' + (state.unmapped.length ? ' ' + state.unmapped.length + ' issues need mapping in Relay settings.' : '')); }
+  try { useWorkspace(await call('refresh', { range: periodRange() })); render(); announce('Refreshed from Jira.' + (state.unmapped.length ? ' ' + state.unmapped.length + ' issues need mapping in Relay settings.' : '')); }
   catch (e) { announce(''); modal('Jira refresh failed', '<p>' + esc(e.message) + '</p><div class="actions"><button data-dismiss>Close</button></div>'); }
   finally { $('refresh').disabled = false; }
 };
@@ -360,6 +393,12 @@ document.addEventListener('change', e => {
   if (id === 'field-p') { const v = values(); delete v.s; changeForm(v); }
   if (id === 'field-s') changeForm(values());
   if (id === 'personFilter') { personFilter = e.target.value; render(); }
+  if (id === 'periodMode') {
+    const mode = e.target.value;
+    // Keep today in view when it is; otherwise centre on the middle of what was shown (so a week switches to the month it mostly falls in).
+    const middle = isoAdd(period.from, Math.floor((Date.parse(period.to) - Date.parse(period.from)) / DAY / 2));
+    if (mode === 'custom') { period = { ...period, mode }; render(); } else { setPeriod(mode, mode !== 'month' && inPeriod(anchorDay()) ? anchorDay() : middle); load(); }
+  }
   if (id === 'pmCal') { pmCal = e.target.value; render(); }
   if (id === 'pmProject') { pmProject = Number(e.target.value); announce(''); render(); }
 });
@@ -379,7 +418,14 @@ document.addEventListener('click', e => {
   if (b.dataset.issue) openIssue(b.dataset.issue);
   if (b.dataset.project !== undefined) projectDetail(+b.dataset.project);
   if (b.id === 'editChange') changeForm({ ...formValues, keepHours: true });
-  if (b.id === 'prev' || b.id === 'next' || b.id === 'first') { week = b.id === 'first' ? Math.floor(M.now / weekSlots) : Math.max(0, Math.min(endWeek(), week + (b.id === 'next' ? 1 : -1))); render(); }
+  if (b.dataset.shift) { shiftPeriod(Number(b.dataset.shift)); load(); }
+  if (b.id === 'periodToday') { setPeriod(period.mode === 'custom' ? 'week' : period.mode, anchorDay()); load(); }
+  if (b.id === 'periodApply') {
+    const from = $('periodFrom').value, to = $('periodTo').value;
+    if (!from || !to || to < from) return announce('Choose a start date before the end date.');
+    if ((Date.parse(to) - Date.parse(from)) / DAY + 1 > MAX_DAYS) return announce('Choose a period of at most ' + MAX_DAYS + ' days.');
+    period = { mode: 'custom', from, to }; load();
+  }
   if (b.id === 'more') { showAll = !showAll; render(); }
   if (b.id === 'apply' && draft) send({ kind: 'draft', v: formValues, baseRev: state.rev });
   if (b.id === 'confirmReset') { tab = 'home'; personFilter = 'all'; filter = 'all'; showAll = false; booted = false; send({ kind: 'reset' }, 'Sample plan restored.'); }
@@ -411,10 +457,10 @@ function pmView() {
   const dates = fixed.length ? fixed.map(({ f, t }) => '<div class="detail">' + esc(t.name) + ' · <b>' + fmt(f.start) + '</b>' + (!Number.isFinite(plan.get(t.id).end) ? ' · At risk' : '') + '</div>').join('') : '<p class="sub">No fixed starts recorded.</p>';
   const risk = !Number.isFinite(forecast) ? 'Awaiting input' : forecast > p.due ? 'Forecast runs late' : 'On track';
   const tasks = state.tasks.filter(t => t.p === pmProject);
-  const logged = logsThisWeek(reportWeek).filter(e => e.p === pmProject);
+  const logged = logsInPeriod().filter(e => e.p === pmProject);
   const header = pmHeader();
   const outlook = '<section class="focus-card"><div class="focus-label">' + risk + '</div><div class="focus-content"><small>' + esc(p.name) + ' milestone</small><h2>' + fmt(forecast) + '</h2><p>Requested by ' + dueText(p) + (Number.isFinite(forecast) && forecast > p.due ? ' · ' + daysLate(forecast, p.due) + ' workdays beyond target' : '') + '</p></div></section>';
-  const effort = '<section class="panel summary-card"><div class="section-head"><h2>Project time</h2><small>Week of ' + fmt(reportWeek * weekSlots) + '</small></div><div class="time-large">' + hours(sumTime(logged)) + '</div><div class="sub">Recorded on ' + esc(p.name) + '</div><button class="link" data-page="report">Open project report →</button></section>';
+  const effort = '<section class="panel summary-card"><div class="section-head"><h2>Project time</h2><small>' + periodLabel() + '</small></div><div class="time-large">' + hours(sumTime(logged)) + '</div><div class="sub">Recorded on ' + esc(p.name) + '</div><button class="link" data-page="report">Open project report →</button></section>';
   return header + '<div class="dash-pair">' + outlook + effort + '</div><section class="panel"><div class="section-head"><h2>Delivery details</h2><span class="sub">' + tasks.filter(t => t.actual != null).length + ' of ' + tasks.length + ' tasks completed</span></div><div class="content"><h3>Fixed starts</h3>' + dates + (blockers ? '<h3>Help needed</h3>' + blockers : '') + noteView(pmProject) + '</div></section>';
 }
 $('role').onchange = () => {
@@ -453,11 +499,9 @@ document.addEventListener('click', event => {
 });
 
 function hours(minutes) { const whole = Math.floor(minutes / 60), part = minutes % 60; return part ? (whole ? whole + 'h ' : '') + part + 'm' : whole + 'h'; }
-function logWeek(iso) { return Math.floor((Date.parse(iso + 'T00:00:00Z') - M.cal.epoch) / (86400000 * 7)); }
 function weekdayName(iso) { return new Date(iso + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }); }
-function logsThisWeek(w) { return state.logs.filter(e => logWeek(e.date) === w); }
+function logsInPeriod() { return state.logs.filter(e => inPeriod(e.date)); }
 function sumTime(entries) { return entries.reduce((n, e) => n + e.minutes, 0); }
-function weekPicker(w) { return '<div class="period"><button data-period="-1" aria-label="Previous report week">‹</button><b>Week of ' + fmt(w * weekSlots) + '</b><button data-period="1" aria-label="Next report week">›</button></div>'; }
 function tableBox(title, headers, rows, empty) {
   return '<section class="panel"><div class="section-head"><h2>' + title + '</h2></div>' + (rows.length ? '<div class="scroll"><table class="data"><thead><tr>' + headers.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>' + rows.map(r => '<tr>' + r.map(v => '<td>' + v + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>' : '<p class="empty">' + empty + '</p>') + '</section>';
 }
@@ -471,18 +515,18 @@ function memberHome() {
   const mine = state.tasks.filter(t => plan.get(t.id).who === member).sort((a, b) => a.rank - b.rank);
   const open = mine.filter(t => t.actual == null);
   const focus = open.find(t => t.started) || open.find(t => !startBlocker(t)) || open.find(t => t.wait);
-  const entries = logsThisWeek(reportWeek).filter(e => e.who === member);
+  const entries = logsInPeriod().filter(e => e.who === member);
   let focusCard = '<p class="empty">No active or ready assignment. Review your upcoming work below.</p>';
   if (focus) {
     const x = plan.get(focus.id);
     focusCard = '<div class="focus-content"><small>' + esc(projects[focus.p].name) + ' / ' + esc(systems[focus.s]) + '</small><h2>' + esc(focus.name) + '</h2><p>' + (focus.wait ? esc(focus.wait.reason) : span(x.start, x.end - 1) + ' · ' + hrs(effectiveWork(focus)) + ' expected work · ' + hrs(duration(focus) - effectiveWork(focus)) + ' buffer') + '</p><button data-task="' + focus.id + '">Open task →</button></div>';
   }
   const rows = open.filter(t => t !== focus).map(t => [esc(projects[t.p].name), '<button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button><small class="meta-line">' + esc(systems[t.s]) + '</small>', span(plan.get(t.id).start, plan.get(t.id).end - 1), statusOf(t)]);
-  return '<div class="dash-pair"><section class="focus-card"><div class="focus-label">' + (focus?.started ? 'In progress' : focus?.wait ? 'Waiting' : 'Next assignment') + '</div>' + focusCard + '</section><section class="panel summary-card"><div class="section-head"><h2>My timesheet</h2><small>Week of ' + fmt(reportWeek * weekSlots) + '</small></div><div class="time-large">' + hours(sumTime(entries)) + '</div><div class="sub">Recorded this week</div><button class="link" data-page="sheet">Open timesheet →</button></section></div>' + tableBox('My other assignments', ['Project', 'Task and system', 'Forecast', 'State'], rows, 'Your queue is clear.');
+  return '<div class="dash-pair"><section class="focus-card"><div class="focus-label">' + (focus?.started ? 'In progress' : focus?.wait ? 'Waiting' : 'Next assignment') + '</div>' + focusCard + '</section><section class="panel summary-card"><div class="section-head"><h2>My timesheet</h2><small>' + periodLabel() + '</small></div><div class="time-large">' + hours(sumTime(entries)) + '</div><div class="sub">Recorded this week</div><button class="link" data-page="sheet">Open timesheet →</button></section></div>' + tableBox('My other assignments', ['Project', 'Task and system', 'Forecast', 'State'], rows, 'Your queue is clear.');
 }
-/** One entry per slot of the week: 'work:<project>', 'buffer:<project>', protected, away, off or free. */
-function loadSlots(w, person) {
-  const start = w * weekSlots, end = start + weekSlots, slots = Array(weekSlots).fill('free');
+/** One entry per slot from `start`: 'work:<project>', 'buffer:<project>', protected, away, off or free. */
+function loadSlots(start, count, person) {
+  const end = start + count, slots = Array(count).fill('free');
   function put(a, b, k) { for (let i = Math.max(start, a); i < Math.min(b, end); i++) slots[i - start] = k; }
   for (const l of state.leave.filter(l => l.who === person)) put(l.start, l.start + l.len, 'away');
   for (const b of state.privateTime.filter(b => b.who === person)) put(b.start, b.start + b.len, 'protected');
@@ -507,20 +551,20 @@ function assigneeNote(t, x) {
 }
 function managerHome() {
   const differs = state.tasks.map(t => [t, plan.get(t.id)]).filter(([t, x]) => t.actual == null && assigneeNote(t, x));
-  const team = active(people), loads = team.map(([, i]) => loadSlots(reportWeek, i));
+  const [d0, d1] = periodDays(), nd = Math.max(0, d1 - d0 + 1), team = active(people), loads = team.map(([, i]) => loadSlots(d0 * spd, nd * spd, i));
   const waiting = state.tasks.filter(t => t.wait), late = projects.filter((p, i) => !p.archived && Number.isFinite(finish(state, plan, i)) && finish(state, plan, i) > p.due);
   const legend = { work: 'Project work', buffer: 'Buffer', protected: 'Private', away: 'Away', free: 'Open', off: 'Not working' };
   // Work and buffer cells name the project and use its calendar colour.
   const label = k => { const [kind, p] = k.split(':'); return p == null ? legend[kind] : (kind === 'buffer' ? 'Buffer · ' : '') + (projects[p]?.name ?? 'Project'); };
   const slotCell = k => { const [kind, p] = k.split(':'); return '<span class="load-cell ' + kind + (p != null ? ' proj" style="' + color(Number(p)) : '') + '" title="' + esc(label(k)) + '">' + esc(label(k)) + '</span>'; };
   const cell = day => day.every(k => k === day[0]) ? slotCell(day[0]) : '<span class="load-split">' + day.map(slotCell).join('') + '</span>';
-  const capacity = '<section class="panel"><div class="section-head"><div><h2>Team capacity</h2><p>One cell per person per workday, split into ' + slotH + 'h slots when they differ.</p></div>' + weekPicker(reportWeek) + '</div><div class="scroll"><table class="data load-table"><thead><tr><th>Team member</th>' + Array.from({ length: 5 }, (_, i) => '<th>' + fmt(reportWeek * weekSlots + i * spd, { weekday: 'short', day: 'numeric' }) + '</th>').join('') + '</tr></thead><tbody>' + loads.map((slots, r) => '<tr><td>' + esc(team[r][0].name) + '</td>' + Array.from({ length: 5 }, (_, d) => '<td>' + cell(slots.slice(d * spd, d * spd + spd)) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div></section>';
-  return metrics([['Open capacity this week', loads.flat().filter(k => k === 'free').length * slotH + 'h'], ['Tasks waiting now', waiting.length], ['Late milestone forecasts', late.length]]) + capacity + tableBox('Blockers to review', ['Project', 'Task', 'Owner', 'Waiting for'], waiting.map(t => [esc(projects[t.p].name), '<button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button>', esc(who(t.wait.who).name), esc(t.wait.reason)]), 'No waiting tasks.') + (differs.length ? tableBox('Jira assignee differs from the plan', ['Task', 'Planned for', 'Jira assignee'], differs.map(([t, x]) => ['<button class="link" data-task="' + t.id + '">' + esc((t.key ? t.key + ' ' : '') + t.name) + '</button>', esc(who(x.who).name), esc(t.assignee.name)]), '') : '') + milestones() +
+  const capacity = '<section class="panel"><div class="section-head"><div><h2>Team capacity</h2><p>One cell per person per workday, split into ' + slotH + 'h slots when they differ.</p></div>' + periodPicker() + '</div><div class="scroll"><table class="data load-table"><thead><tr><th>Team member</th>' + Array.from({ length: nd }, (_, i) => '<th>' + fmt((d0 + i) * spd, { weekday: 'short', day: 'numeric' }) + '</th>').join('') + '</tr></thead><tbody>' + loads.map((slots, r) => '<tr><td>' + esc(team[r][0].name) + '</td>' + Array.from({ length: nd }, (_, d) => '<td>' + cell(slots.slice(d * spd, d * spd + spd)) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div></section>';
+  return metrics([['Open capacity', loads.flat().filter(k => k === 'free').length * slotH + 'h'], ['Tasks waiting now', waiting.length], ['Late milestone forecasts', late.length]]) + capacity + tableBox('Blockers to review', ['Project', 'Task', 'Owner', 'Waiting for'], waiting.map(t => [esc(projects[t.p].name), '<button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button>', esc(who(t.wait.who).name), esc(t.wait.reason)]), 'No waiting tasks.') + (differs.length ? tableBox('Jira assignee differs from the plan', ['Task', 'Planned for', 'Jira assignee'], differs.map(([t, x]) => ['<button class="link" data-task="' + t.id + '">' + esc((t.key ? t.key + ' ' : '') + t.name) + '</button>', esc(who(x.who).name), esc(t.assignee.name)]), '') : '') + milestones() +
     tableBox('Recent changes', ['When', 'Who', 'What'], (state.changes ?? []).slice(0, 8).map(c => [new Date(c.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }), esc(c.by), esc(c.what)]), 'No changes yet.');
 }
-/** Timesheet entries this role sees for the report week. */
+/** Timesheet entries this role sees in the period. */
 function visibleEntries() {
-  return logsThisWeek(reportWeek).filter(e => (role === 'member' ? e.who === member : role === 'pm' ? e.p === pmProject : true));
+  return logsInPeriod().filter(e => (role === 'member' ? e.who === member : role === 'pm' ? e.p === pmProject : true));
 }
 const exportButton = () => '<button data-export>Export CSV</button>';
 /** Download the visible entries as CSV for invoicing or payroll. */
@@ -531,31 +575,31 @@ function exportCsv() {
     const t = state.tasks.find(t => t.id === e.task);
     return [e.date, people[e.who]?.name ?? '', e.p != null ? projects[e.p]?.name ?? '' : 'Internal work', t ? t.name : e.label ?? '', (e.minutes / 60).toFixed(2), e.note ?? ''];
   })];
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([rows.map(r => r.map(cell).join(',')).join('\r\n')], { type: 'text/csv' })), download: 'timesheet-' + weekRange().from + '.csv' });
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([rows.map(r => r.map(cell).join(',')).join('\r\n')], { type: 'text/csv' })), download: 'timesheet-' + period.from + '_' + period.to + '.csv' });
   a.click();
   URL.revokeObjectURL(a.href);
 }
 function timesheetView() {
-  const entries = logsThisWeek(reportWeek).filter(e => e.who === member).sort((a, b) => a.date.localeCompare(b.date));
-  return '<div class="report-bar">' + weekPicker(reportWeek) + exportButton() + '</div>' + metrics([['Total recorded', hours(sumTime(entries))], ['Project work', hours(sumTime(entries.filter(e => e.p != null)))], ['Internal work', hours(sumTime(entries.filter(e => e.p == null)))]]) + tableBox('Time entries', ['Date', 'Work', 'Duration', timeInJira ? 'Comment' : 'Personal note', ''], entries.map(e => {
+  const entries = logsInPeriod().filter(e => e.who === member).sort((a, b) => a.date.localeCompare(b.date));
+  return '<div class="report-bar">' + periodPicker() + exportButton() + '</div>' + metrics([['Total recorded', hours(sumTime(entries))], ['Project work', hours(sumTime(entries.filter(e => e.p != null)))], ['Internal work', hours(sumTime(entries.filter(e => e.p == null)))]]) + tableBox('Time entries', ['Date', 'Work', 'Duration', timeInJira ? 'Comment' : 'Personal note', ''], entries.map(e => {
     const t = state.tasks.find(t => t.id === e.task);
     return [weekdayName(e.date), t ? esc(projects[t.p].name) + '<small class="meta-line">' + esc(t.name) + '</small>' : e.label ? esc(e.label) : 'Internal work', hours(e.minutes), esc(e.note || '—'), '<button data-entry="' + esc(e.id) + '">Edit</button>'];
-  }), timeInJira ? 'No time logged in Jira this week. Use Log time to add a work log.' : 'No time recorded this week. Use Log time to add an entry.');
+  }), timeInJira ? 'No time logged in Jira in this period. Use Log time to add a work log.' : 'No time recorded in this period. Use Log time to add an entry.');
 }
 function dailyRows(entries) {
-  return Array.from({ length: 7 }, (_, i) => {
-    const iso = new Date(M.cal.epoch + (reportWeek * 7 + i) * 86400000).toISOString().slice(0, 10);
+  return Array.from({ length: Math.round((Date.parse(period.to) - Date.parse(period.from)) / DAY) + 1 }, (_, i) => {
+    const iso = isoAdd(period.from, i);
     return [weekdayName(iso), hours(sumTime(entries.filter(e => e.date === iso)))];
   });
 }
 function reportView() {
   const pm = role === 'pm', personal = role === 'member', entries = visibleEntries();
-  const bar = '<div class="report-bar">' + weekPicker(reportWeek) + exportButton() + (pm ? '<label>Project <select id="pmProject">' + options(me.pmProjects.filter(i => projects[i]).map(i => [i, projects[i].name]), pmProject) + '</select></label>' : '') + '</div>';
+  const bar = '<div class="report-bar">' + periodPicker() + exportButton() + (pm ? '<label>Project <select id="pmProject">' + options(me.pmProjects.filter(i => projects[i]).map(i => [i, projects[i].name]), pmProject) + '</select></label>' : '') + '</div>';
   if (pm) {
     const bySystem = systems.map((system, i) => [system, sumTime(entries.filter(e => state.tasks.find(t => t.id === e.task)?.s === i))]).filter(([, n]) => n > 0).map(([system, n]) => [esc(system), hours(n)]);
     const current = finish(state, plan, pmProject), p = projects[pmProject];
     if (!p) return bar + '<p class="empty">No projects are assigned to you yet.</p>';
-    return bar + metrics([['Project hours this week', hours(sumTime(entries))], ['Current milestone forecast', fmt(current)], ['Requested milestone', dueText(p)]]) + tableBox('Time by system', ['System', 'Recorded time'], bySystem, 'No project hours recorded this week.') + tableBox('Project time by day', ['Date', 'Logged project time'], dailyRows(entries), '') + '<button data-page="outlook">Open project outlook →</button>';
+    return bar + metrics([['Project hours', hours(sumTime(entries))], ['Current milestone forecast', fmt(current)], ['Requested milestone', dueText(p)]]) + tableBox('Time by system', ['System', 'Recorded time'], bySystem, 'No project hours recorded in this period.') + tableBox('Project time by day', ['Date', 'Logged project time'], dailyRows(entries), '') + '<button data-page="outlook">Open project outlook →</button>';
   }
   const stats = metrics([['Recorded hours', hours(sumTime(entries))], ['Project work', hours(sumTime(entries.filter(e => e.p != null)))], ['Internal work', hours(sumTime(entries.filter(e => e.p == null)))]]);
   const groups = tableBox('Time by project', ['Project or category', 'Recorded time'], projectTotals(entries), 'No entries for this period.');
@@ -567,7 +611,7 @@ function reportView() {
 }
 function logForm(existing, taskId) {
   if (role !== 'member' || (existing && existing.who !== member)) return;
-  const e = existing ?? { task: taskId || '', date: M.cal.isoOfDay(reportWeek * 5), minutes: 60, note: '' };
+  const e = existing ?? { task: taskId || '', date: inPeriod(today) ? today : period.from, minutes: 60, note: '' };
   const internal = settings.general.internalIssue;
   const choices = [
     ...(!timeInJira ? [['', 'Internal work']] : internal ? [['', 'Internal work (' + internal + ')']] : []),
@@ -590,17 +634,13 @@ document.addEventListener('submit', async event => {
   // Demo entries get their id here so a retry overwrites; Jira assigns work log ids itself.
   const entry = { id: old?.id ?? (timeInJira ? undefined : crypto.randomUUID()), issue: old?.issue, prevTask: old ? old.task ?? '' : undefined, prevDate: old?.date, task: data.get('entryTask') || '', date: dateValue, minutes, note: data.get('note') };
   const ok = await send({ kind: 'log', entry }, (timeInJira ? 'Logged in Jira · ' : 'Time saved · ') + hours(minutes) + ' on ' + weekdayName(dateValue) + '.');
-  if (ok) { reportWeek = logWeek(dateValue); render(); }
+  if (ok) { if (!inPeriod(dateValue)) setPeriod(period.mode === 'custom' ? 'week' : period.mode, dateValue); load(); }
 });
 document.addEventListener('click', event => {
   const b = event.target.closest('button'); if (!b) return;
   if (b.dataset.page) { tab = b.dataset.page; render(); }
   if (b.hasAttribute('data-export')) exportCsv();
   if (b.dataset.push) pushToJira(b.dataset.pushTask, b.dataset.push);
-  if (b.dataset.period) {
-    reportWeek = Math.max(0, reportWeek + Number(b.dataset.period));
-    load();
-  }
   if (role !== 'member') return;
   if (b.dataset.logTask) logForm(null, b.dataset.logTask);
   if (b.dataset.entry) logForm(state.logs.find(e => e.id === b.dataset.entry));
