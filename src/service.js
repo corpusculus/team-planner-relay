@@ -179,6 +179,8 @@ export function createService({ store, jira, today = utcToday }) {
       const { settings: prev, state } = await load(ctx.today);
       if (switchMode) {
         const settings = prev.demo ? liveSettings(prev) : sampleSettings();
+        // Going live starts with the admin who switched as team manager, so they can open the planner straight away.
+        if (prev.demo && jira) settings.people = [{ name: (await jira.myself()).displayName, role: '', access: 'team', skills: settings.systems.map((_, i) => i), accountId: ctx.accountId, pmProjects: [], archived: false }];
         await writeLogs(state, [], state.logMonths);
         await store.set('settings', settings);
         await savePlan({ ...(settings.demo ? sampleState(settings) : emptyState(settings)), rev: state.rev + 1, logMonths: state.logMonths }, settings, ctx.today);

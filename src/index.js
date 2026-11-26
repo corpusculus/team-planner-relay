@@ -35,6 +35,7 @@ const jira = {
     }
     return allowed;
   },
+  myself: () => requestJira(route`/rest/api/3/myself`),
   isAdmin: async () => (await requestJira(route`/rest/api/3/mypermissions?permissions=ADMINISTER`)).permissions?.ADMINISTER?.havePermission === true
 };
 

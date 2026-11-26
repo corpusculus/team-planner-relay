@@ -3,7 +3,7 @@ import { estimate, multiplier, toSlots } from '../../src/shared/estimate.js';
 import { call, isLocal } from '../common/backend.js';
 import { $, esc, options, modal } from '../common/ui.js';
 
-let saved, s, meta, dirty = false, jiraProjects = [], userResults = [], trial = { type: 0, p: 0, s: 0 };
+let saved, s, meta, dirty = false, jiraProjects = [], search = { target: null, query: '', users: [] }, trial = { type: 0, p: 0, s: 0 };
 
 const status = (text, error = false) => { $('status').textContent = text; $('status').className = 'grow ' + (error ? 'late' : 'sub'); };
 const markDirty = () => { dirty = true; status('Unsaved changes'); };
@@ -87,12 +87,12 @@ function render() {
       '</div>', t.archived)).join('') +
     '<button data-add="type">＋ Add task type</button>' + tryIt());
 
-  const people = panel('People', s.demo ? 'The fictional demo team. In live mode you add Jira users here.' : 'Team members are Jira users. Role decides what they can see and change. Skills decide which systems they can cover.',
-    (!s.demo ? '<div class="queue-tools"><label>Add a Jira user <input id="userQuery" placeholder="Name or email" autocomplete="off"></label><button id="userSearch">Search</button>' + (userResults.length ? sel('', userResults.map((u, i) => [i, u.name]), '', 'id="userPick"') + '<button id="userAdd">Add</button>' : '') + '</div>' : '<button data-add="person">＋ Add person</button>') +
+  const people = panel('People', s.demo ? 'The fictional demo team. Switch to live mode to add your Jira users and set who is who.' : 'Team members are Jira users. Role decides what they can see and change. Skills decide which systems they can cover.',
+    (!s.demo ? '<div class="queue-tools"><span class="field-label">Add a Jira user</span>' + finder('new') + '</div>' : '<button data-add="person">＋ Add person</button>') +
     s.people.map((p, i) => card(text('people.' + i + '.name', p.name, 'aria-label="Name"') + bool('people.' + i + '.archived', p.archived, 'Archived'), '<div class="grid-form">' +
       field('Job title', text('people.' + i + '.role', p.role)) +
       field('Role in Relay', sel('people.' + i + '.access', [['member', 'Team member'], ['team', 'Team manager'], ['pm', 'Project manager']], p.access, 'data-rerender')) +
-      field('Jira user', '<input disabled value="' + (p.accountId ? 'Linked' : 'Not linked') + '">') +
+      group('Jira user', s.demo ? '<p class="hint">Available in live mode.</p>' : p.accountId ? '<div class="link-row"><span class="linked">✓ Linked</span><button type="button" data-unlink="' + i + '">Unlink</button></div>' : finder(String(i)), s.demo ? '' : p.accountId ? 'Signs in to Relay as this person.' : 'Not linked: cannot open the planner.') +
       group('Skills', many('people.' + i + '.skills', systemsList(), p.skills), '', 'full') +
       (p.access === 'pm' ? group('Projects they manage', many('people.' + i + '.pmProjects', s.projects.map((x, j) => [j, x.name]), p.pmProjects), '', 'full') : '') +
       '</div>', p.archived)).join(''));
@@ -137,6 +137,13 @@ function trialResult() {
     } catch (err) { result = esc(err.message); }
   }
   return result;
+}
+
+/** Jira user search box; `target` is 'new' (add a person) or a person index (link that person). */
+function finder(target) {
+  const hit = search.target === target;
+  return '<div class="link-row"><input id="find-' + target + '" placeholder="Name or email" autocomplete="off" value="' + esc(hit ? search.query : '') + '"><button type="button" data-find="' + target + '">Find</button>' +
+    (hit && search.users.length ? '<select id="pick-' + target + '" aria-label="Jira user">' + options(search.users.map((u, k) => [k, u.name]), 0) + '</select><button type="button" class="primary" data-pick="' + target + '">' + (target === 'new' ? 'Add' : 'Link') + '</button>' : '') + '</div>';
 }
 
 const blank = {
@@ -187,14 +194,20 @@ document.addEventListener('click', async e => {
   }
   if (b.id === 'save') await run(() => call('saveSettings', { settings: s }), 'Settings saved.');
   if (b.id === 'discard') { s = structuredClone(saved); dirty = false; render(); status('Changes discarded.'); }
-  if (b.id === 'userSearch') {
-    try { userResults = (await call('searchUsers', { query: $('userQuery').value })).users; render(); if (!userResults.length) status('No Jira users found.'); } catch (err) { status(err.message, true); }
+  if (b.dataset.find !== undefined) {
+    const target = b.dataset.find, query = $('find-' + target).value;
+    try { search = { target, query, users: (await call('searchUsers', { query })).users }; render(); if (!search.users.length) status('No Jira users found for “' + query + '”.', true); } catch (err) { status(err.message, true); }
   }
-  if (b.id === 'userAdd') {
-    const u = userResults[Number($('userPick').value)];
-    if (u && !s.people.some(p => p.accountId === u.accountId)) { s.people.push({ ...blank.person(), name: u.name, accountId: u.accountId }); markDirty(); }
-    userResults = []; render();
+  if (b.dataset.pick !== undefined) {
+    const target = b.dataset.pick, u = search.users[Number($('pick-' + target).value)];
+    if (!u) return;
+    const other = s.people.findIndex(p => p.accountId === u.accountId);
+    if (other >= 0 && String(other) !== target) return status(u.name + ' is already linked to ' + s.people[other].name + '.', true);
+    if (target === 'new') s.people.push({ ...blank.person(), name: u.name, accountId: u.accountId });
+    else Object.assign(s.people[Number(target)], { accountId: u.accountId }, s.people[Number(target)].name === 'New person' ? { name: u.name } : {});
+    search = { target: null, query: '', users: [] }; markDirty(); render();
   }
+  if (b.dataset.unlink !== undefined) { s.people[Number(b.dataset.unlink)].accountId = null; markDirty(); render(); }
   if (b.id === 'jiraAdd') {
     const j = jiraProjects.find(x => x.key === $('jiraPick').value);
     if (j) { s.projects.push({ ...blank.project(), name: j.name, jiraKey: j.key }); markDirty(); render(); }

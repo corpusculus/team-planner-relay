@@ -213,4 +213,12 @@ describe('service', () => {
     expect(pickDay('2026-11-20', '2026-11-26')).toBe('2026-11-26');
     expect(pickDay('nonsense', '2026-11-26')).toBe('2026-11-26');
   });
+
+  it('makes the admin who switches to live the first team manager', async () => {
+    const store = memStore(), jira = { myself: async () => ({ displayName: 'Vera Admin' }) };
+    const svc = createService({ store, jira, today: () => TODAY });
+    const res = await svc.handle('saveSettings', ctx('vera', true), { switchMode: true });
+    expect(res.settings.people).toEqual([expect.objectContaining({ name: 'Vera Admin', accountId: 'vera', access: 'team' })]);
+    expect((await svc.handle('getWorkspace', ctx('vera'), {})).notMember).toBeUndefined();
+  });
 });
