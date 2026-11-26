@@ -1,5 +1,5 @@
 
-:root{--ink:#233239;--muted:#56676e;--line:#dce2df;--wash:#f5f6f2;--teal:#075b51;--sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:"SFMono-Regular",Consolas,monospace}
+:root{--ink:#1e332c;--muted:#56676e;--line:#dce2df;--wash:#f3f5f1;--teal:#125c4b;--control-h:38px;--field-min:190px;--row-gap:16px;--sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:"SFMono-Regular",Consolas,monospace}
 
 *{box-sizing:border-box}
 body{margin:0;background:var(--wash);color:var(--ink);font:14px/1.48 var(--sans)}
@@ -10,6 +10,7 @@ button:hover,select:hover{border-color:#81958c}
 button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid #148875;outline-offset:2px}
 button:disabled{opacity:.35;cursor:default}
 button.primary{color:white;background:var(--teal);border-color:var(--teal)}
+:where(button:not(.block):not(.task-tile):not(.tab)){min-height:var(--control-h);white-space:nowrap}
 .top{background:#193a36;color:#f7fffb}
 .bar,main{max-width:1440px;margin:auto;padding:0 clamp(16px,4.6vw,76px)}
 .bar{height:64px;display:flex;align-items:center;gap:14px}
@@ -26,7 +27,7 @@ button.primary{color:white;background:var(--teal);border-color:var(--teal)}
 .tab{height:100%;background:none;border:0;border-radius:0;padding:0;color:var(--muted);border-bottom:3px solid transparent;padding-top:3px}
 .tab.active{color:var(--teal);border-color:var(--teal)}
 main{padding-bottom:60px}
-.hero,.section-head,.row,.controls,.foot,.facts{display:flex;align-items:center;gap:10px}
+.hero,.section-head,.row,.controls,.foot{display:flex;align-items:center;gap:10px}
 .hero,.section-head,.foot{justify-content:space-between}
 .hero{margin:30px 0 22px}
 .hero h1{font-size:clamp(31px,4vw,48px);letter-spacing:-2.3px;margin:0;line-height:1.12}
@@ -49,7 +50,9 @@ main{padding-bottom:60px}
 .person{min-height:66px;border-bottom:1px solid var(--line)}
 .person:last-child{border-bottom:0}
 .who{padding:10px 12px 10px 20px;display:flex;align-items:center;gap:9px}
-.who b,.who small{display:block}
+.who>div{min-width:0}
+/* Names and titles stay on one line so every calendar row is the same height. */
+.who b,.who small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .who small{font-size:11px;color:var(--muted)}
 .avatar{border-radius:50%;display:inline-grid;place-items:center;width:30px;height:30px;flex-shrink:0;background:#eef2eb;color:#506454;font-size:11px;font-weight:700}
 .lane{grid-column:2/7;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));background:repeating-linear-gradient(to right,var(--line) 0 1px,transparent 1px 20%);align-items:stretch}
@@ -61,17 +64,19 @@ main{padding-bottom:60px}
 .away{background:repeating-linear-gradient(-45deg,#f4f4f0 0 5px,#eaece7 5px 7px);border-color:#9aaba1;color:#44574f;align-content:center}
 .foot{border-top:1px solid var(--line);padding:10px 20px;color:var(--muted);font-size:12px;flex-wrap:wrap}
 .data{border-collapse:collapse;width:100%;text-align:left;min-width:630px}
-.data th{background:#f8f9f6;border-block:1px solid var(--line);color:var(--muted);font:11px var(--mono);text-transform:uppercase;letter-spacing:.5px}
+.data th{white-space:nowrap;background:#f8f9f6;border-block:1px solid var(--line);color:var(--muted);font:11px var(--mono);text-transform:uppercase;letter-spacing:.5px}
 .data td,.data th{padding:10px 20px}
 .data td{border-bottom:1px solid #e9ede8}
 .data tr:last-child td{border:0}
-.project{background:none;border:0;padding:0;display:inline-flex;align-items:center;gap:8px;text-align:left}
+/* No text links: actions and item names that open something are buttons. */
+.link,.project{background:#fff;border:1px solid var(--line);border-radius:7px;padding:6px 12px;min-height:var(--control-h);color:var(--ink);font-weight:610;display:inline-flex;align-items:center;gap:8px;text-align:left;white-space:normal}
+.link:hover,.project:hover{border-color:#81958c}
 .dot{width:9px;height:9px;display:inline-block;background:var(--accent);border-radius:3px;flex-shrink:0}
 .status{font-size:12px;color:#355e4b}
 .late{color:#964222;font-weight:650}
 .sub{color:var(--muted);font-size:12px}
-.link{border:0;color:var(--teal);background:transparent;padding:4px 0}
-.select,select,input{border:1px solid #c7d1cb;border-radius:6px;background:#fff;padding:8px 10px;max-width:100%}
+select,input{border:1px solid #c7d1cb;border-radius:6px;background:#fff;padding:8px 10px;max-width:100%}
+input:not([type=checkbox]):not([type=radio]),select{height:var(--control-h);width:100%;min-width:0}
 dialog{padding:0;border:1px solid #bdccc3;border-radius:13px;color:var(--ink);width:min(640px,94vw);max-height:90dvh;box-shadow:0 20px 80px #10282036}
 dialog::backdrop{background:#11251f70}
 .modalhead{display:flex;justify-content:space-between;align-items:center;padding:17px 21px;border-bottom:1px solid var(--line)}
@@ -79,9 +84,18 @@ dialog::backdrop{background:#11251f70}
 .close{padding:3px 9px;font-size:19px}
 .content{padding:18px 21px}
 .content p:first-child{margin-top:0}
-.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:13px}
-.field{font-size:13px;font-weight:620;display:grid;gap:5px}
+.formgrid,.grid-form{display:grid;column-gap:14px;align-items:start}
+.formgrid{grid-template-columns:1fr 1fr}
+.grid-form{grid-template-columns:repeat(auto-fill,minmax(var(--field-min),1fr))}
+/* A field is label / control / hint. Subgrid lines those rows up across a row of fields whatever the text length;
+   spacing uses margins because subgrid keeps the parent's row gap. */
+.field{font-size:13px;font-weight:620;display:grid;grid-row:span 3;grid-template-rows:subgrid;align-content:start;min-width:0;padding-bottom:var(--row-gap)}
+.field>input,.field>select,.field>textarea,.field>.checks{margin-top:6px}
+.field .hint{margin:0;font-weight:450}
+.field .hint:not(:empty){margin-top:5px}
 .full{grid-column:1/-1}
+.formgrid>.full:not(.field),.formgrid>.source{grid-row:span 1}
+.checks{min-height:var(--control-h);align-content:center}
 .actions{display:flex;justify-content:flex-end;gap:8px;align-items:center;margin-top:20px}
 .note{background:#edf3ed;border:1px solid #d7e3d9;padding:12px;border-radius:7px}
 .detail{padding:9px 0;border-bottom:1px solid var(--line)}
@@ -104,39 +118,26 @@ h3{font-size:15px;margin:18px 0 6px}
 .workspace,.divider{display:none}
 .section-head .row{flex-wrap:wrap}
 .formgrid{grid-template-columns:1fr}
-.full{grid-column:auto}
 .below{align-items:flex-start;gap:20px}
 .data td,.data th{padding:10px 12px}
 }
 
 .role{margin-left:auto;display:flex;align-items:center;gap:7px;color:#dceae3;font-size:12px}
 .role select{padding:6px 8px;background:#274a43;color:white;border-color:#688277}
-.top #guide{margin-left:0}
 .private{background:#edf1ee;color:#40574a;border-left-color:#82998b}
 .meeting.fixed{outline:1px solid var(--accent);outline-offset:-2px}
 .context-note{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 14px}
-textarea{width:100%;font:inherit;border:1px solid #c7d1cb;border-radius:6px;padding:10px;resize:vertical}
-.pmfacts{display:flex;gap:26px;flex-wrap:wrap;padding:0 21px 17px}
-.pmfacts small,.pmfacts b{display:block}
-.pmfacts small{color:var(--muted)}
+textarea{width:100%;min-width:0;font:inherit;border:1px solid #c7d1cb;border-radius:6px;padding:10px;resize:vertical}
 [hidden]{display:none!important}
 @media(max-width:700px){.role span{display:none}
 .bar{gap:8px}
 .brand{font-size:18px}
-.top #guide{padding:6px;font-size:11px}
 }
 
 .buffer{background:repeating-linear-gradient(135deg,var(--tint) 0 4px,#fafbf8 4px 8px);color:var(--fg)}
 .done{opacity:.75}
-.queue-row{padding:10px 20px;display:grid;align-items:center;grid-template-columns:minmax(110px,.8fr) minmax(160px,1.6fr) minmax(100px,1fr) minmax(80px,.6fr);gap:12px;border-top:1px solid var(--line)}
-.queue-row small{display:block;color:var(--muted)}
-.queue-row button{text-align:left}
-.queue-row .tag{width:fit-content}
 .task-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}
-@media(max-width:650px){.queue-row{grid-template-columns:1fr 1.4fr;gap:5px 10px}
-}
 
-:root{--wash:#f3f5f1;--ink:#1e332c;--teal:#125c4b}
 .hero{margin-top:34px}
 .top{background:#163b31}
 .tabs .bar{gap:clamp(14px,2.4vw,34px)}
@@ -168,7 +169,6 @@ textarea{width:100%;font:inherit;border:1px solid #c7d1cb;border-radius:6px;padd
 .rule h2{margin:0 0 7px;font-size:18px;letter-spacing:-.5px}
 .rule p{margin:0;color:var(--muted);line-height:1.65}
 .wait-note{background:#f7efd9;border-radius:7px;padding:12px}
-.top .role{margin-left:auto}
 .tabs{overflow-x:auto}
 .tabs .bar{width:max-content;min-width:100%;margin:auto}
 .task-tile,.tile-detail{overflow-wrap:anywhere}
@@ -187,8 +187,9 @@ textarea{width:100%;font:inherit;border:1px solid #c7d1cb;border-radius:6px;padd
 .rule{padding:16px}
 }
 
-.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:white;border:1px solid var(--line);border-radius:12px;margin-bottom:20px;padding:18px 0}
-.metrics>div{padding:0 22px;border-right:1px solid var(--line)}
+/* Stats: label row and number row line up across the tiles. */
+.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:auto auto;row-gap:4px;background:white;border:1px solid var(--line);border-radius:12px;margin-bottom:20px;padding:18px 0}
+.metrics>div{padding:0 22px;border-right:1px solid var(--line);display:grid;grid-row:span 2;grid-template-rows:subgrid;align-content:space-between}
 .metrics>div:last-child{border:0}
 .metrics small,.summary-card small{color:var(--muted);font-size:12px}
 .metrics strong{display:block;font-size:30px;letter-spacing:-1.4px;font-weight:640}
@@ -211,7 +212,9 @@ textarea{width:100%;font:inherit;border:1px solid #c7d1cb;border-radius:6px;padd
 .period button{padding:3px 9px;font-size:17px}
 .period b{font-size:13px}
 .load-table td,.load-table th{padding:9px 12px}
-.load-cell{display:block;border-radius:4px;padding:6px 8px;font-size:12px;text-align:center}
+.load-table td{min-width:96px}
+/* Capacity cells: one line, same height. */
+.load-cell{display:block;border-radius:4px;padding:6px 8px;font-size:12px;text-align:center;height:34px;line-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .load-cell.work{background:#d9ebe3;color:#205a43}
 .load-cell.protected{background:#e5e1ee;color:#5a496a}
 .load-cell.buffer{background:repeating-linear-gradient(135deg,#f6ebcf 0 5px,#fbf6e8 5px 10px);color:#715820}
@@ -233,71 +236,31 @@ textarea{width:100%;font:inherit;border:1px solid #c7d1cb;border-radius:6px;padd
 
 
 /* Relay for Jira additions */
-.load-split{display:flex;gap:2px}.load-split .load-cell{flex:1;padding:6px 2px;font-size:10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.load-split{display:flex;gap:2px}.load-split .load-cell{flex:1;padding:6px 2px;font-size:10px}
 .identity{margin-left:auto;color:#dceae3;font-size:12px}.top .tool{margin-left:8px}
 .source{font-size:12px;color:var(--muted);margin:-6px 0 6px}
 .gate{max-width:560px;margin:60px auto;text-align:center}
 .error-panel{border:1px solid #e3c5b7;background:#fbf1ec;color:#7a3a1f;border-radius:10px;padding:16px 20px;margin:20px 0}
 
-/* ---- Layout system: sizes come from tokens, not from the text inside ---- */
-:root{--control-h:38px;--field-min:190px;--field-gap:6px;--row-gap:16px}
-input:not([type=checkbox]):not([type=radio]),select{height:var(--control-h);width:100%;min-width:0}
-textarea{width:100%;min-width:0}
-:where(button:not(.block):not(.task-tile):not(.tab)){min-height:var(--control-h);white-space:nowrap}
 .queue-tools select,.queue-tools input,.role select,#memberPreview,#filter,#pmProject{width:auto}
-/* Fields: label / control / hint rows line up across a row of fields (subgrid), whatever the label or hint length. */
-.formgrid,.grid-form{display:grid;column-gap:14px;row-gap:var(--row-gap);align-items:start}
-.grid-form{grid-template-columns:repeat(auto-fill,minmax(var(--field-min),1fr))}
-.field{display:grid;grid-row:span 3;grid-template-rows:subgrid;row-gap:var(--field-gap);align-content:start;min-width:0}
-.field .hint{margin:0;font-weight:450}
-.field.full,.formgrid>.full{grid-column:1/-1}
-.formgrid>.full:not(.field),.formgrid>.source{grid-row:span 1}
-/* Stats: label row and number row align across the three tiles. */
-.metrics{grid-template-rows:auto auto;row-gap:4px}
-.metrics>div{display:grid;grid-row:span 2;grid-template-rows:subgrid;align-content:space-between}
-/* Capacity cells: one line, same height. */
-.load-cell{height:34px;line-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.load-table td{min-width:96px}
-.data th{white-space:nowrap}
-.checks{min-height:var(--control-h);align-content:center}
 @media(max-width:700px){
   :root{--row-gap:12px}
   .grid-form{grid-template-columns:1fr}
   .queue-tools{flex-wrap:wrap}
-  .metrics>div{padding:0 10px}
-  /* Editable tables become one labelled block per row. */
+  /* Tables become one labelled block per row (labels from data-label). */
   .data.stack,.data.stack tbody,.data.stack tr,.data.stack td{display:block;min-width:0;width:100%}
-  .data.stack{min-width:0}
   .data.stack thead{display:none}
   .data.stack tr{border-bottom:1px solid var(--line);padding:8px 0}
+  .panel>.scroll .data.stack tr{padding:8px 16px}
   .data.stack td{border:0;padding:4px 0;display:grid;grid-template-columns:110px 1fr;align-items:center;gap:10px}
-  .data.stack td>input[type=radio]{justify-self:start;margin:0}
   .data.stack td::before{content:attr(data-label);font:11px var(--mono);text-transform:uppercase;color:var(--muted)}
-}
-@media(max-width:700px){
+  .data.stack td:empty::before{content:none}
+  .data.stack td>input[type=radio],.data.stack .link{justify-self:start;margin:0}
   /* Wide time grids still scroll sideways; keep the person column visible. */
   .load-table td:first-child,.load-table th:first-child{position:sticky;left:0;z-index:1;background:#fff;box-shadow:1px 0 0 var(--line)}
   .load-table th:first-child{background:#f8f9f6}
-  .board .who{position:sticky;left:0;z-index:2;background:#fff;box-shadow:1px 0 0 var(--line)}
-  .board .days>div:first-child{position:sticky;left:0;z-index:2;background:#f8f9f6}
-  .data.stack td:empty::before{content:none}
-  .panel>.scroll .data.stack tr{padding:8px 16px}
-  .data.stack .link{justify-self:start;text-align:left}
-}
-/* Calendar rows: names and titles stay on one line so every row is the same height. */
-.who>div{min-width:0}
-.who b,.who small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-@media(max-width:700px){
   .board .grid{grid-template-columns:128px repeat(5,minmax(0,1fr))}
-  .board .who{padding:10px 8px 10px 12px}
+  .board .who{position:sticky;left:0;z-index:2;background:#fff;box-shadow:1px 0 0 var(--line);padding:10px 8px 10px 12px}
   .board .who .avatar{display:none}
+  .board .days>div:first-child{position:sticky;left:0;z-index:2;background:#f8f9f6}
 }
-/* Subgrid keeps the parent's row gap inside fields, so spacing comes from margins instead of gaps. */
-.formgrid,.grid-form{row-gap:0}
-.field{row-gap:0;padding-bottom:var(--row-gap)}
-.field>input,.field>select,.field>textarea,.field>.checks{margin-top:6px}
-.field .hint:not(:empty){margin-top:5px}
-/* No text links: actions and item names that open something are buttons. */
-.link,.project{background:#fff;border:1px solid var(--line);border-radius:7px;padding:6px 12px;min-height:var(--control-h);color:var(--ink);font-weight:610;display:inline-flex;align-items:center;gap:8px;text-align:left;white-space:normal}
-.link:hover,.project:hover{border-color:#81958c}
-.top .tool{margin-left:8px}

@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { createModel, normalize } from '../src/shared/model.js';
 import { estimate, percentile } from '../src/shared/estimate.js';
 import { sampleSettings, sampleState, liveSettings } from '../src/shared/defaults.js';
-import { mapIssues, mergeTasks, matchType } from '../src/shared/jira-map.js';
+import { mapIssues, mergeTasks, matchType, historyFromIssues } from '../src/shared/jira-map.js';
 import { validateSettings } from '../src/shared/validate.js';
-import { createService } from '../src/service.js';
+import { createService, pickDay } from '../src/service.js';
 
 const TODAY = '2026-11-26';
 const memStore = (init = {}) => { const m = new Map(Object.entries(init)); return { get: async k => structuredClone(m.get(k)), set: async (k, v) => void m.set(k, structuredClone(v)), m }; };
@@ -153,5 +153,64 @@ describe('service', () => {
     expect(saved.settings.general.slotHours).toBe(2);
     expect(saved.settings.evil).toBeUndefined();
     expect(() => validateSettings({ ...s, general: { ...s.general, planStart: '2026-12-01' } })).toThrow(/Monday/);
+  });
+
+  it('keeps the plan unchanged when any Jira page fails', async () => {
+    const store = liveStore(), s = await store.get('settings');
+    s.projects[0].jiraKey = 'PA';
+    await store.set('settings', s);
+    let calls = 0;
+    const jira = { search: async () => { if (calls++) throw new Error('HTTP 500'); return { issues: [{ id: '1', key: 'PA-1', fields: { project: { key: 'PA' }, issuetype: { name: 'Task' }, components: [{ name: 'Integration' }] } }], nextPageToken: 'next', isLast: false }; } };
+    const before = await store.get('plan');
+    expect((await createService({ store, jira, today: () => TODAY }).handle('refresh', ctx('max'), {})).error).toBeTruthy();
+    expect(await store.get('plan')).toEqual(before);
+  });
+
+  it('lets members change only their own assignments and hides other tasks from them', async () => {
+    const svc = createService({ store: liveStore(), jira: null, today: () => TODAY });
+    // t0 is planned for Ana (lead), t1 for Max (Ana is busy).
+    expect((await svc.handle('apply', ctx('ana'), { op: { kind: 'draft', baseRev: 3, v: { kind: 'estimate', taskId: 't1', hours: 4, buffer: 0 } } })).error).toMatch(/own assignments/);
+    const ws = await svc.handle('getWorkspace', ctx('ana'), {});
+    expect(ws.state.tasks.map(t => t.name)).toEqual(['Secret 0', 'Team work']);
+  });
+
+  it('hides issues a PM cannot browse in Jira', async () => {
+    const store = liveStore(), plan = await store.get('plan');
+    plan.tasks[0] = { ...plan.tasks[0], id: 'jira-100', key: 'PA-1' };
+    await store.set('plan', plan);
+    const jira = { canBrowse: async ids => (expect(ids).toEqual(['100']), new Set()) };
+    const ws = await createService({ store, jira, today: () => TODAY }).handle('getWorkspace', ctx('pia'), {});
+    expect(ws.state.tasks[0]).toMatchObject({ name: 'Restricted issue', key: undefined });
+  });
+
+  it('stores time entries by month, outside the plan, once per entry id', async () => {
+    const store = liveStore(), svc = createService({ store, jira: null, today: () => TODAY });
+    const op = { kind: 'log', entry: { id: 'entry-0001', task: 't0', date: '2026-11-27', minutes: 90 } };
+    await svc.handle('apply', ctx('ana'), { op });
+    const ws = await svc.handle('apply', ctx('ana'), { op }); // retried request
+    expect((await store.get('logs:2026-11')).map(e => e.id)).toEqual(['entry-0001']);
+    expect((await store.get('plan')).rev).toBe(3); // a preview made before this is still valid
+    expect(ws.state.logs).toHaveLength(1);
+    expect((await svc.handle('apply', ctx('max'), { op: { kind: 'log', entry: { ...op.entry, minutes: 5 } } })).error).toMatch(/your own/);
+    await svc.handle('apply', ctx('ana'), { op: { kind: 'log', entry: { ...op.entry, date: '2026-12-01', prevDate: '2026-11-27' } } });
+    expect(await store.get('logs:2026-11')).toEqual([]);
+    expect((await store.get('logs:2026-12')).map(e => e.date)).toEqual(['2026-12-01']);
+  });
+
+  it('does not count a task finished in Relay twice when importing Jira history', async () => {
+    const store = liveStore(), s = await store.get('settings'), plan = await store.get('plan');
+    s.projects[0].jiraKey = 'PA';
+    plan.completed = [{ id: 'jira-100', type: 1, p: 0, s: 1, hours: 8, mult: 1, at: '2026-10-01', source: 'relay' }];
+    await store.set('settings', s); await store.set('plan', plan);
+    const done = id => ({ id, key: 'PA-' + id, fields: { project: { key: 'PA' }, issuetype: { name: 'Task' }, components: [{ name: 'Integration' }], timespent: 7200, resolutiondate: '2026-10-02T10:00:00.000+0000' } });
+    const jira = { search: async () => ({ issues: [done('100'), done('101')], isLast: true }) };
+    expect(await createService({ store, jira, today: () => TODAY }).handle('importHistory', ctx('max'), {})).toEqual({ imported: 1 });
+    expect((await store.get('plan')).completed.map(c => c.id)).toEqual(['jira-100', 'jira-101']);
+  });
+
+  it('uses the caller\'s local date only within a day of UTC', () => {
+    expect(pickDay('2026-11-25', '2026-11-26')).toBe('2026-11-25');
+    expect(pickDay('2026-11-20', '2026-11-26')).toBe('2026-11-26');
+    expect(pickDay('nonsense', '2026-11-26')).toBe('2026-11-26');
   });
 });

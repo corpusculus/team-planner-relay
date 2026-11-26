@@ -2,15 +2,14 @@
 import { createModel } from '../../src/shared/model.js';
 import { estimate, toSlots } from '../../src/shared/estimate.js';
 import { call, openIssue, isLocal } from '../common/backend.js';
+import { $, esc, options, modal } from '../common/ui.js';
 
-const $ = id => document.getElementById(id);
-const esc = v => String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const colors = [['#248275', '#d8eee8', '#184e46'], ['#7460a8', '#e9e3f5', '#493c69'], ['#ad7331', '#f5e9d4', '#6e4d24'], ['#4676a4', '#dfeaf5', '#304e70'], ['#aa626b', '#f6e4e5', '#6b3c44'], ['#68813f', '#e8efd9', '#455827']];
 
 // Workspace (set by useWorkspace)
 let settings, today, me, M, people, projects, systems, types, state, plan;
 let fmt, span, slotLabel, hrs, daysLate, dueText, who, effectiveWork, duration, spent, statusOf, eligible, finish;
-let spd, slotH, weekSlots;
+let spd, slotH, weekSlots, logMonths = [];
 // View state
 let role = 'member', pmProject = 0, member = 2, reportWeek = 0;
 try { const last = sessionStorage.getItem('relay.preview.role'); if (['member', 'team', 'pm'].includes(last)) role = last; const w = sessionStorage.getItem('relay.preview.member'); if (w !== null) member = Number(w); } catch {}
@@ -24,15 +23,18 @@ function useWorkspace(ws) {
   if (role === 'pm' && !me.pmProjects.includes(pmProject)) pmProject = me.pmProjects[0] ?? 0;
   if (!people[member]) member = 0;
   plan = M.schedule(state);
+  logMonths = ws.logMonths ?? [];
   if (!booted) { booted = true; week = reportWeek = Math.floor(M.now / weekSlots); tab = role === 'pm' ? 'outlook' : 'home'; }
 }
 const demoCtx = () => ({ role, member });
+/** Timesheet months (YYYY-MM) covering the report week; the backend only sends the months asked for. */
+const weekMonths = () => (M ? [0, 6].map(d => new Date(M.cal.epoch + (reportWeek * 7 + d) * 86400000).toISOString().slice(0, 7)) : []);
 const startBlocker = t => M.startBlocker(state, plan, t);
 const active = list => list.map((x, i) => [x, i]).filter(([x]) => !x.archived);
 
 async function load() {
   try {
-    const ws = await call('getWorkspace', { demo: demoCtx() });
+    const ws = await call('getWorkspace', { demo: demoCtx(), months: weekMonths() });
     if (ws.notMember) return gate(ws.isAdmin);
     useWorkspace(ws);
     render();
@@ -49,7 +51,7 @@ async function send(op, message = 'Change applied. The schedule and milestone fo
   if (busy) return;
   busy = true;
   try {
-    const ws = await call('apply', { op, demo: demoCtx(), opId: crypto.randomUUID() });
+    const ws = await call('apply', { op, demo: demoCtx(), opId: crypto.randomUUID(), months: weekMonths() });
     useWorkspace(ws);
     if ($('modal').open) $('modal').close();
     render();
@@ -154,7 +156,6 @@ function milestones() {
 function coverage() {
   return '<section class="panel"><div class="section-head"><div><h2>Project contacts</h2><p>Select a project for system-level coverage and scheduled tasks.</p></div></div><div class="scroll"><table class="data"><thead><tr><th>Project</th><th>Primary</th><th>Backup</th><th>Systems</th></tr></thead><tbody>' + active(projects).map(([p, i]) => '<tr><td>' + projectLink(i) + '</td><td>' + esc(who(p.lead).name) + '</td><td>' + (p.back === null ? 'No backup' : esc(who(p.back).name)) + '</td><td>' + p.systems.length + '</td></tr>').join('') + '</tbody></table></div></section>';
 }
-function modal(title, html) { $('dialogTitle').textContent = title; $('body').innerHTML = html; if (!$('modal').open) $('modal').showModal(); $('modal').scrollTop = 0; }
 
 function queueView() {
   const items = state.tasks.filter(t => personFilter === 'all' || String(plan.get(t.id).who) === personFilter).sort((a, b) => a.rank - b.rank);
@@ -202,14 +203,13 @@ function taskDetail(id) {
   if (t.started && t.actual == null) actions = '<button data-pause="' + id + '">Mark waiting</button><button data-revise="' + id + '">Update expected duration</button><button class="primary" data-finish="' + id + '">Record finish</button>';
   if (role === 'member') actions += '<button data-log-task="' + id + '">Log time</button>';
   if (t.key) actions = '<button data-issue="' + esc(t.key) + '">Open ' + esc(t.key) + ' in Jira</button>' + actions;
-  modal(projects[t.p].name + ' · ' + t.name, '<p class="note"><b>' + esc(who(x.who).name) + '</b> · ' + esc(systems[t.s]) + ' · ' + span(x.start, x.end - 1) + '<br>' + statusOf(t) + (t.gone ? ' · No longer in the Jira filter' : '') + '</p>' + (t.wait ? '<p class="wait-note"><b>Waiting for</b> ' + esc(t.wait.reason) + '</p>' : '') + '<p>Task type: ' + esc(types[t.type]?.name ?? '—') + '<br>Clear-sky effort: ' + hrs(t.work) + '<br>Original buffer: ' + hrs(t.buffer) + '<br>' + (t.actual != null ? 'Actual effort: ' + hrs(t.actual) : 'Current expected work: ' + hrs(effectiveWork(t)) + '<br>Buffer remaining: ' + hrs(duration(t) - effectiveWork(t))) + '</p><p class="source">Estimate: ' + esc(t.source || '—') + '</p><p>Qualified contacts: ' + (eligible(t).map(w => esc(people[w].name)).join(', ') || 'None') + '<br>Depends on: ' + esc(state.tasks.find(z => z.id === t.after)?.name || 'Ready to start') + '</p><div class="task-actions">' + (role === 'team' ? '<button data-project="' + t.p + '">View project</button>' : '') + actions + '</div>' + (blocker ? '<p class="sub">' + blocker + '</p>' : ''));
+  modal(projects[t.p].name + ' · ' + t.name, '<p class="note"><b>' + esc(who(x.who).name) + '</b> · ' + esc(systems[t.s]) + ' · ' + span(x.start, x.end - 1) + '<br>' + statusOf(t) + (t.gone ? ' · No longer in the Jira filter' : '') + '</p>' + (t.wait ? '<p class="wait-note"><b>Waiting for</b> ' + esc(t.wait.reason) + '</p>' : '') + '<p>Task type: ' + esc(types[t.type]?.name ?? '—') + '<br>Clear-sky effort: ' + hrs(t.work) + '<br>Original buffer: ' + hrs(t.buffer) + '<br>' + (t.actual != null ? 'Actual effort: ' + hrs(t.actual) : 'Current expected work: ' + hrs(effectiveWork(t)) + '<br>Buffer remaining: ' + hrs(duration(t) - effectiveWork(t))) + '</p><p class="source">Estimate: ' + esc(t.source || '—') + '</p><p>Qualified contacts: ' + (eligible(t).map(w => esc(people[w].name)).join(', ') || 'None') + '<br>Depends on: ' + esc(state.tasks.find(z => z.id === t.after)?.name || 'Ready to start') + '</p><div class="task-actions">' + (role === 'team' ? '<button data-project="' + t.p + '">View project</button>' : '') + actions + '</div>' + (blocker ? '<p class="sub">' + esc(blocker) + '</p>' : ''));
 }
 function projectDetail(i) {
   if (role !== 'team') return;
   const p = projects[i];
   modal(p.name, '<p class="note">Requested by <b>' + dueText(p) + '</b> · Forecast <b>' + fmt(finish(state, plan, i)) + '</b>' + (p.jiraKey ? ' · Jira ' + esc(p.jiraKey) : '') + '</p>' + noteView(i) + '<h3>System coverage</h3>' + p.systems.map(s => '<div class="detail">' + esc(systems[s]) + ' · ' + eligible({ p: i, s }).map(w => esc(people[w].name)).join(', ') + '</div>').join('') + '<h3>Scheduled tasks</h3>' + state.tasks.filter(t => t.p === i).map(t => { const x = plan.get(t.id); return '<div class="detail"><button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button><small>' + esc(who(x.who).name) + ' · ' + span(x.start, x.end - 1) + '</small></div>'; }).join(''));
 }
-function options(items, selected) { return items.map(([v, label]) => '<option value="' + esc(v) + '" ' + (String(v) === String(selected) ? 'selected' : '') + '>' + esc(label) + '</option>').join(''); }
 function selectField(label, key, items, value, wide = false) { return '<label class="field ' + (wide ? 'full' : '') + '">' + label + '<select name="' + key + '" id="field-' + key + '">' + options(items, value) + '</select></label>'; }
 function values() { return Object.fromEntries(new FormData($('changeForm'))); }
 const hourInput = (label, key, hours, min) => '<label class="field">' + label + '<input type="number" required min="' + min + '" step="' + slotH + '" max="8760" name="' + key + '" value="' + Number(hours) + '"></label>';
@@ -285,7 +285,7 @@ $('reset').onclick = () => modal('Reset sample plan?', '<p>This restores the ori
 $('settingsLink').onclick = () => { location.href = '../settings/'; };
 $('refresh').onclick = async () => {
   $('refresh').disabled = true; announce('Reading Jira…');
-  try { useWorkspace(await call('refresh')); render(); announce('Refreshed from Jira.' + (state.unmapped.length ? ' ' + state.unmapped.length + ' issues need mapping in Relay settings.' : '')); }
+  try { useWorkspace(await call('refresh', { months: weekMonths() })); render(); announce('Refreshed from Jira.' + (state.unmapped.length ? ' ' + state.unmapped.length + ' issues need mapping in Relay settings.' : '')); }
   catch (e) { announce(''); modal('Jira refresh failed', '<p>' + esc(e.message) + '</p><div class="actions"><button data-dismiss>Close</button></div>'); }
   finally { $('refresh').disabled = false; }
 };
@@ -474,18 +474,21 @@ document.addEventListener('submit', async event => {
   event.preventDefault();
   const data = new FormData(event.target), minutes = Number(data.get('hours')) * 60 + Number(data.get('minutes')), dateValue = data.get('when');
   if (minutes <= 0) { $('logError').textContent = 'Enter a positive duration.'; return; }
-  const ok = await send({ kind: 'log', entry: { id: event.target.dataset.id || null, task: data.get('entryTask') || null, date: dateValue, minutes, note: data.get('note') } }, 'Time saved · ' + hours(minutes) + ' on ' + weekdayName(dateValue) + '.');
+  const ok = await send({ kind: 'log', entry: { id: event.target.dataset.id || crypto.randomUUID(), prevDate: state.logs.find(x => x.id === event.target.dataset.id)?.date, task: data.get('entryTask') || null, date: dateValue, minutes, note: data.get('note') } }, 'Time saved · ' + hours(minutes) + ' on ' + weekdayName(dateValue) + '.');
   if (ok) { reportWeek = logWeek(dateValue); render(); }
 });
 document.addEventListener('click', event => {
   const b = event.target.closest('button'); if (!b) return;
   if (b.dataset.page) { tab = b.dataset.page; render(); }
-  if (b.dataset.period) { reportWeek = Math.max(0, reportWeek + Number(b.dataset.period)); render(); }
+  if (b.dataset.period) {
+    reportWeek = Math.max(0, reportWeek + Number(b.dataset.period));
+    if (weekMonths().every(m => logMonths.includes(m))) render(); else load();
+  }
   if (role !== 'member') return;
   if (b.dataset.logTask) logForm(null, b.dataset.logTask);
   if (b.dataset.entry) logForm(state.logs.find(e => e.id === b.dataset.entry));
   if (b.dataset.removeLog) modal('Delete time entry?', '<p>This removes the recorded hours from your timesheet and the weekly reports.</p><div class="actions"><button data-dismiss>Cancel</button><button class="primary" data-delete-log="' + esc(b.dataset.removeLog) + '">Delete entry</button></div>');
-  if (b.dataset.deleteLog) send({ kind: 'deleteLog', id: b.dataset.deleteLog });
+  if (b.dataset.deleteLog) send({ kind: 'deleteLog', id: b.dataset.deleteLog, date: state.logs.find(x => x.id === b.dataset.deleteLog)?.date });
 });
 
 load();

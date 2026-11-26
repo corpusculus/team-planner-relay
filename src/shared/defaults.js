@@ -5,7 +5,7 @@ import { multiplier } from './estimate.js';
 export const GENERAL = {
   workdayHours: 8, slotHours: 4, dayStartHour: 8, planStart: '2026-11-30',
   estimatePercentile: 70, bufferPercentile: 90, minSamples: 3, historyMonths: 12,
-  jiraHistory: true, storyPointsField: 'customfield_10016'
+  storyPointsField: 'customfield_10016', blockLinkType: 'Blocks'
 };
 export const SIZES = [
   { id: 'S', name: 'Small', multiplier: 0.75 },

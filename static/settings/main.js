@@ -1,9 +1,8 @@
 // Relay settings (Jira admin page): planning units, task types, estimation, people, projects and Jira mapping.
 import { estimate, multiplier, toSlots } from '../../src/shared/estimate.js';
 import { call, isLocal } from '../common/backend.js';
+import { $, esc, options, modal } from '../common/ui.js';
 
-const $ = id => document.getElementById(id);
-const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let saved, s, meta, dirty = false, jiraProjects = [], userResults = [], trial = { type: 0, p: 0, s: 0 };
 
 const status = (text, error = false) => { $('status').textContent = text; $('status').className = 'grow ' + (error ? 'late' : 'sub'); };
@@ -19,10 +18,9 @@ async function load() {
 }
 
 // ---- small form helpers; data-path is a dotted path into the settings object ----
-const opts = (items, value) => items.map(([v, l]) => '<option value="' + esc(v) + '"' + (String(v) === String(value ?? '') ? ' selected' : '') + '>' + esc(l) + '</option>').join('');
 const text = (path, value, attrs = '') => '<input data-path="' + path + '" value="' + esc(value) + '" ' + attrs + '>';
 const num = (path, value, attrs = '') => '<input type="number" data-path="' + path + '" data-num value="' + esc(value) + '" ' + attrs + '>';
-const sel = (path, items, value, attrs = '') => '<select data-path="' + path + '" ' + attrs + '>' + opts(items, value) + '</select>';
+const sel = (path, items, value, attrs = '') => '<select data-path="' + path + '" ' + attrs + '>' + options(items, value) + '</select>';
 const bool = (path, value, label) => '<label><input type="checkbox" data-path="' + path + '" data-bool ' + (value ? 'checked' : '') + '> ' + label + '</label>';
 // Every field is label / control / hint, so the CSS can line rows up regardless of text length.
 const field = (label, input, hint = '', cls = '') => '<label class="field ' + cls + '"><span class="field-label">' + label + '</span>' + input + '<span class="hint">' + hint + '</span></label>';
@@ -64,7 +62,8 @@ function render() {
     field('Minimum finished tasks', num('general.minSamples', g.minSamples, 'min="1" max="50"'), 'Needed before history is used.') +
     field('History window (months)', num('general.historyMonths', g.historyMonths, 'min="1" max="60"')) +
     field('Story points field', text('general.storyPointsField', g.storyPointsField, 'placeholder="customfield_10016"'), 'Jira field id, for types that use story points.') +
-    group('History from Jira', '<div class="checks">' + bool('general.jiraHistory', g.jiraHistory, 'Use time spent on done Jira issues') + '</div>') +
+    field('Dependency link type', text('general.blockLinkType', g.blockLinkType ?? 'Blocks'), 'Jira link that makes one issue wait for another.') +
+    group('History from Jira', s.demo ? '<p class="hint">Available in live mode.</p>' : '<div class="checks"><button id="importHistory" type="button">Import finished issues</button></div>', s.demo ? '' : meta.completed.filter(c => c.source === 'jira').length + ' records from Jira time logs') +
     '</div><h3>System size levels</h3>' +
     table(['Code', 'Name', 'Multiplier', 'Default'], s.sizes.map((z, i) => [text('sizes.' + i + '.id', z.id, 'maxlength="8"'), text('sizes.' + i + '.name', z.name), num('sizes.' + i + '.multiplier', z.multiplier, 'step="0.05" min="0.1" max="10"'), '<input type="radio" name="defaultSize" aria-label="Default size" data-default-size="' + esc(z.id) + '" ' + (s.defaultSize === z.id ? 'checked' : '') + '>'])) +
     '<button data-add="size">＋ Add size level</button><h3>Complexity factors</h3>' +
@@ -114,7 +113,7 @@ function render() {
     }).join(''));
 
   const unmapped = s.demo ? '' : panel('Needs mapping', 'Jira issues from the last refresh that Relay could not plan. Fix a task type rule, a component, or a project contact, then refresh.',
-    meta.unmapped.length ? table(['Issue', 'Project', 'Reason'], meta.unmapped.map(u => ['<b>' + esc(u.key) + '</b> ' + esc(u.summary), esc(u.project), esc(u.reason)])) : '<p class="empty">Nothing to map.</p>');
+    meta.unmapped.length ? (meta.unmappedTotal > meta.unmapped.length ? '<p class="hint">Showing ' + meta.unmapped.length + ' of ' + meta.unmappedTotal + '.</p>' : '') + table(['Issue', 'Project', 'Reason'], meta.unmapped.map(u => ['<b>' + esc(u.key) + '</b> ' + esc(u.summary), esc(u.project), esc(u.reason)])) : '<p class="empty">Nothing to map.</p>');
 
   $('view').innerHTML = mode + unmapped + general + estimation + types + systems + people + projects;
 }
@@ -122,9 +121,9 @@ function render() {
 /** Live estimate preview so admins can see what the numbers produce before saving. */
 function tryIt() {
   return '<h3>Try an estimate</h3><div class="grid-form">' +
-    field('Task type', '<select data-trial="type">' + opts(s.types.map((t, i) => [i, t.name]), trial.type) + '</select>') +
-    field('Project', '<select data-trial="p">' + opts(s.projects.map((p, i) => [i, p.name]), trial.p) + '</select>') +
-    field('System', '<select data-trial="s">' + opts(systemsList(), trial.s) + '</select>') +
+    field('Task type', '<select data-trial="type">' + options(s.types.map((t, i) => [i, t.name]), trial.type) + '</select>') +
+    field('Project', '<select data-trial="p">' + options(s.projects.map((p, i) => [i, p.name]), trial.p) + '</select>') +
+    field('System', '<select data-trial="s">' + options(systemsList(), trial.s) + '</select>') +
     '</div><div class="result" id="trialResult">' + trialResult() + '</div>';
 }
 function trialResult() {
@@ -181,6 +180,11 @@ document.addEventListener('click', async e => {
     status('Reading Jira…');
     try { await call('refresh'); await load(); status('Refreshed from Jira. ' + meta.unmapped.length + ' issues need mapping.'); } catch (err) { status(err.message, true); }
   }
+  if (b.id === 'importHistory') {
+    if (dirty) return status('Save settings before importing.', true);
+    status('Reading finished issues from Jira…');
+    try { const r = await call('importHistory'); await load(); status('Imported ' + r.imported + ' finished issues.'); } catch (err) { status(err.message, true); }
+  }
   if (b.id === 'save') await run(() => call('saveSettings', { settings: s }), 'Settings saved.');
   if (b.id === 'discard') { s = structuredClone(saved); dirty = false; render(); status('Changes discarded.'); }
   if (b.id === 'userSearch') {
@@ -200,7 +204,6 @@ async function run(fn, message) {
   try { meta = await fn(); saved = meta.settings; s = structuredClone(saved); dirty = false; render(); status(message); }
   catch (err) { status(err.message, true); }
 }
-function modal(title, html) { $('dialogTitle').textContent = title; $('body').innerHTML = html; $('modal').showModal(); }
 $('close').onclick = () => $('modal').close();
 $('plannerLink').onclick = () => { location.href = '../planner/'; };
 window.addEventListener('beforeunload', e => { if (dirty) e.preventDefault(); });

@@ -4,7 +4,7 @@ import { estimate, multiplier, toSlots } from './estimate.js';
 const list = s => String(s || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
 
 export function issueFields(settings) {
-  const f = ['summary', 'issuetype', 'components', 'labels', 'assignee', 'timeoriginalestimate', 'issuelinks', 'timespent', 'resolutiondate'];
+  const f = ['summary', 'project', 'issuetype', 'components', 'labels', 'assignee', 'timeoriginalestimate', 'issuelinks', 'timespent', 'resolutiondate'];
   return settings.general.storyPointsField ? [...f, settings.general.storyPointsField] : f;
 }
 
@@ -32,7 +32,7 @@ const covers = (settings, p, s) => [settings.projects[p].lead, settings.projects
 
 /** issues: [{ p, issue }]. Returns { tasks, unmapped }. Tasks carry no rank; the caller merges them into the plan. */
 export function mapIssues(issues, settings, completed, todayIso) {
-  const tasks = [], unmapped = [], g = settings.general;
+  const tasks = [], unmapped = [], g = settings.general, linkType = (g.blockLinkType || 'Blocks').toLowerCase();
   const person = accountId => settings.people.findIndex(x => x.accountId && x.accountId === accountId && !x.archived);
   for (const { p, issue } of issues) {
     const f = issue.fields || {}, base = { key: issue.key, summary: String(f.summary || '').slice(0, 120), project: settings.projects[p].name };
@@ -41,7 +41,7 @@ export function mapIssues(issues, settings, completed, todayIso) {
     const s = systemOf(f, type, settings);
     if (!covers(settings, p, s)) { unmapped.push({ ...base, reason: 'Nobody on ' + base.project + ' covers ' + settings.systems[s] + '.' }); continue; }
     const est = estimate(settings, { type, p, s, labels: f.labels, originalEstimateSec: f.timeoriginalestimate, storyPoints: Number(f[g.storyPointsField]) || 0 }, completed, todayIso);
-    const blocker = (f.issuelinks || []).find(l => l.type?.name === 'Blocks' && l.inwardIssue)?.inwardIssue;
+    const blocker = (f.issuelinks || []).find(l => l.type?.name?.toLowerCase() === linkType && l.inwardIssue)?.inwardIssue;
     const prefer = f.assignee ? person(f.assignee.accountId) : -1;
     tasks.push({
       id: 'jira-' + issue.id, key: issue.key, name: base.summary || issue.key, p, s, type, labels: f.labels || [],
@@ -59,7 +59,7 @@ export function historyFromIssues(issues, settings) {
     const f = issue.fields || {}, type = matchType(f, settings.types);
     if (type < 0 || !(f.timespent > 0) || !f.resolutiondate) continue;
     const s = systemOf(f, type, settings);
-    out.push({ type, p, s, hours: f.timespent / 3600, mult: multiplier(settings, p, s, f.labels).value, at: f.resolutiondate.slice(0, 10), source: 'jira' });
+    out.push({ id: 'jira-' + issue.id, type, p, s, hours: f.timespent / 3600, mult: multiplier(settings, p, s, f.labels).value, at: f.resolutiondate.slice(0, 10), source: 'jira' });
   }
   return out;
 }

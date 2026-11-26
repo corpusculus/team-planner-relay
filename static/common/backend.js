@@ -1,5 +1,7 @@
 // One call() for both runtimes: Forge bridge inside Jira, the same service in-browser for `npm run dev`.
 export async function call(name, payload = {}) {
+  // The caller's local date; the backend accepts it when it is within a day of UTC.
+  payload = { ...payload, today: new Date().toLocaleDateString('en-CA') };
   const res = import.meta.env.DEV
     ? await (await import('./local.js')).localCall(name, payload)
     : await (await import('@forge/bridge')).invoke(name, payload);

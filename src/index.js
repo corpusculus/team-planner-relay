@@ -26,12 +26,21 @@ const jira = {
   // shortcut: first 100 projects only; page through /project/search if a site has more.
   projects: () => requestJira(route`/rest/api/3/project/search?maxResults=100&orderBy=name`),
   users: query => requestJira(route`/rest/api/3/user/search?query=${query}&maxResults=20`),
+  /** Issue ids (strings) the calling user may browse. */
+  canBrowse: async ids => {
+    const allowed = new Set();
+    for (let i = 0; i < ids.length; i += 1000) {
+      const res = await requestJira(route`/rest/api/3/permissions/check`, { method: 'POST', body: JSON.stringify({ projectPermissions: [{ permissions: ['BROWSE_PROJECTS'], issues: ids.slice(i, i + 1000).map(Number) }] }) });
+      for (const p of res.projectPermissions ?? []) for (const id of p.issues ?? []) allowed.add(String(id));
+    }
+    return allowed;
+  },
   isAdmin: async () => (await requestJira(route`/rest/api/3/mypermissions?permissions=ADMINISTER`)).permissions?.ADMINISTER?.havePermission === true
 };
 
 const service = createService({ store: { get: key => kvs.get(key), set: (key, value) => kvs.set(key, value) }, jira });
 const resolver = new Resolver();
-for (const name of ['getWorkspace', 'apply', 'getSettings', 'saveSettings', 'refresh', 'jiraProjects', 'searchUsers'])
+for (const name of ['getWorkspace', 'apply', 'getSettings', 'saveSettings', 'refresh', 'importHistory', 'jiraProjects', 'searchUsers'])
   resolver.define(name, ({ payload, context }) => service.handle(name, { accountId: context.accountId, isAdmin: jira.isAdmin }, payload));
 
 export const handler = resolver.getDefinitions();

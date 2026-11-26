@@ -46,7 +46,7 @@ export function validateSettings(input, prev) {
     bufferPercentile: num(gi.bufferPercentile, estimatePercentile, 99, 'Buffer percentile', true),
     minSamples: num(gi.minSamples, 1, 50, 'Minimum history samples', true),
     historyMonths: num(gi.historyMonths, 1, 60, 'History window', true),
-    jiraHistory: !!gi.jiraHistory,
+    blockLinkType: str(gi.blockLinkType ?? 'Blocks', 60, 'Dependency link type'),
     storyPointsField: /^[a-zA-Z0-9_]{0,40}$/.test(gi.storyPointsField ?? '') ? (gi.storyPointsField ?? '') : fail('Story points field must look like customfield_10016.')
   };
   const systems = arr(s.systems, 50, 'Systems').map((x, i) => str(x, 40, 'System ' + (i + 1)));

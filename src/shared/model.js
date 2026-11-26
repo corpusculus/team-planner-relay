@@ -19,7 +19,7 @@ export function calendar(general) {
 }
 
 export function emptyState(settings) {
-  return { rev: 0, unit: unitOf(settings), tasks: [], leave: [], privateTime: [], fixed: [], notes: {}, logs: [], completed: [], unmapped: [], ops: [] };
+  return { rev: 0, unit: unitOf(settings), tasks: [], leave: [], privateTime: [], fixed: [], notes: {}, logs: [], logMonths: [], completed: [], unmapped: [], ops: [] };
 }
 const unitOf = settings => ({ slotHours: settings.general.slotHours, workdayHours: settings.general.workdayHours });
 
@@ -44,6 +44,26 @@ export function normalize(state, settings) {
     s.unit = to;
   }
   return s;
+}
+
+/**
+ * Add, edit or delete one of the caller's time entries. `logs` holds the months the entry is in (and was in).
+ * New entries arrive with a client-made id so a retried request is applied once.
+ */
+export function applyLogOp(logs, op, me, tasks) {
+  if (op.kind === 'deleteLog') return logs.filter(x => x.id !== op.id || x.who !== me.person);
+  const e = op.entry || {}, minutes = Number(e.minutes), date = String(e.date || ''), id = String(e.id || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) throw new UserError('Choose a date.');
+  if (!Number.isInteger(minutes) || minutes <= 0) throw new UserError('Enter a positive duration.');
+  if (!/^[\w-]{8,64}$/.test(id)) throw new UserError('This time entry is not valid. Reload and try again.');
+  const existing = logs.find(x => x.id === id);
+  if (existing && existing.who !== me.person) throw new UserError('You can only edit your own time entries.');
+  const sameDay = logs.filter(x => x.id !== id && x.who === me.person && x.date === date).reduce((n, x) => n + x.minutes, 0);
+  if (sameDay + minutes > 1440) throw new UserError('Daily entries can total up to 24 hours.');
+  const t = e.task ? tasks.find(t => t.id === e.task) : null;
+  if (e.task && !t) throw new UserError('This task is no longer in the plan.');
+  const entry = { id, who: me.person, task: t?.id ?? null, p: t?.p ?? null, date, minutes, note: String(e.note ?? '').trim().slice(0, 400) };
+  return logs.filter(x => x.id !== id).concat(entry);
 }
 
 export function createModel(settings, todayIso) {
@@ -236,7 +256,7 @@ export function createModel(settings, todayIso) {
       if (v.kind === 'finish') {
         if (!t.started) throw new UserError('Start the task before recording its finish.');
         t.actual = n;
-        if (t.type != null) next.completed.push({ type: t.type, p: t.p, s: t.s, hours: n * slotH, mult: multiplier(settings, t.p, t.s, t.labels).value, at: todayIso, source: 'relay' });
+        if (t.type != null) next.completed.push({ id: t.id, type: t.type, p: t.p, s: t.s, hours: n * slotH, mult: multiplier(settings, t.p, t.s, t.labels).value, at: todayIso, source: 'relay' });
       }
       summary = projects[t.p].name + ' · ' + t.name + ' · ' + (v.kind === 'finish' ? 'Finished in ' + hrs(n) : hrs(effectiveWork(t)) + ' expected + ' + hrs(duration(t) - effectiveWork(t)) + ' buffer');
     } else if (v.kind === 'urgent' || v.kind === 'queued') {
@@ -303,22 +323,6 @@ export function createModel(settings, todayIso) {
       if (!projects[p]) throw new UserError('Choose a project.');
       next.notes[p] = text(op.text, 800);
       message = 'Shared project note saved.';
-    } else if (op.kind === 'log') {
-      const e = op.entry || {}, minutes = Number(e.minutes), date = String(e.date || '');
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) throw new UserError('Choose a date.');
-      if (!Number.isInteger(minutes) || minutes <= 0) throw new UserError('Enter a positive duration.');
-      const existing = e.id ? next.logs.find(x => x.id === e.id) : null;
-      if (e.id && (!existing || existing.who !== me.person)) throw new UserError('You can only edit your own time entries.');
-      const sameDay = next.logs.filter(x => x.id !== e.id && x.who === me.person && x.date === date).reduce((n, x) => n + x.minutes, 0);
-      if (sameDay + minutes > 1440) throw new UserError('Daily entries can total up to 24 hours.');
-      const t = e.task ? next.tasks.find(t => t.id === e.task) : null;
-      if (e.task && !t) throw new UserError('This task is no longer in the plan.');
-      const entry = { id: existing?.id ?? crypto.randomUUID(), who: me.person, task: t?.id ?? null, p: t?.p ?? null, date, minutes, note: text(e.note, 400) };
-      next.logs = next.logs.filter(x => x.id !== entry.id).concat(entry);
-      message = 'Time saved · ' + Math.floor(minutes / 60) + 'h ' + (minutes % 60) + 'm.';
-    } else if (op.kind === 'deleteLog') {
-      next.logs = next.logs.filter(x => x.id !== op.id || x.who !== me.person);
-      message = 'Time entry deleted.';
     } else throw new UserError('Unknown change.');
     schedule(next);
     return { next, message };
