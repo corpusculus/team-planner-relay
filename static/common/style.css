@@ -20,7 +20,7 @@ button.primary{color:white;background:var(--teal);border-color:var(--teal)}
 .logo i{width:4px;background:#1d4740;border-radius:3px;height:10px}
 .logo i:nth-child(2){height:19px}
 .logo i:last-child{height:14px}
-.brand{font-size:22px;letter-spacing:-1px;font-weight:700}
+.brand{font-size:22px;letter-spacing:-1px;font-weight:700;white-space:nowrap}
 .divider{height:21px;border-left:1px solid #59746c}
 .workspace{color:#c4d4cd}
 .top button{margin-left:auto;background:transparent;border-color:#607b70;color:white;font-size:13px}
@@ -73,10 +73,12 @@ main{padding-bottom:60px}
 /* No text links: actions and item names that open something are buttons. */
 .link,.project{background:#fff;border:1px solid var(--line);border-radius:7px;padding:6px 12px;min-height:var(--control-h);min-width:var(--button-min);color:var(--ink);font-weight:610;display:inline-flex;align-items:center;gap:8px;text-align:left;white-space:normal}
 .link:hover,.project:hover{border-color:#81958c}
-/* In tables, item buttons fill their column so every button in a column has the same width. */
-.data td>.link,.data td>.project{width:100%}
+/* In tables the whole row opens the item (see main.js); its name is a borderless button so keyboards can still reach it. */
+.data td>.link,.data td>.project{border:0;background:none;padding:0;min-height:0;min-width:0}
+.data tbody tr:has(td>.link,td>.project){cursor:pointer}
+.data tbody tr:has(td>.link,td>.project):hover{background:#f6f8f4}
+.data tbody tr:hover td>:is(.link,.project){text-decoration:underline}
 .dot{width:9px;height:9px;display:inline-block;background:var(--accent);border-radius:3px;flex-shrink:0}
-.status{font-size:12px;color:#355e4b}
 .late{color:#964222;font-weight:650}
 .sub{color:var(--muted);font-size:12px}
 select,input{border:1px solid #c7d1cb;border-radius:6px;background:#fff;padding:8px 10px;max-width:100%}
@@ -106,8 +108,9 @@ dialog::backdrop{background:#11251f70}
 .detail:last-child{border:0}
 .detail b,.detail small{display:block}
 .detail small{color:var(--muted)}
-.message{min-height:0;color:var(--teal);margin:0 0 12px}
-.message:empty{margin:0}
+/* Confirmation toast: stays in view wherever the page is scrolled. */
+.message{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:20;max-width:min(560px,92vw);background:#163b31;color:#fff;padding:11px 18px;border-radius:9px;box-shadow:0 8px 30px #10282040;font-weight:560}
+.message:empty{display:none}
 h3{font-size:15px;margin:18px 0 6px}
 .below{display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:12px}
 .empty{color:var(--muted);padding:14px}
@@ -193,8 +196,11 @@ textarea{width:100%;min-width:0;font:inherit;border:1px solid #c7d1cb;border-rad
 
 /* Stats: label row and number row line up across the tiles. */
 .metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:auto auto;row-gap:4px;background:white;border:1px solid var(--line);border-radius:12px;margin-bottom:20px;padding:18px 0}
-.metrics>div{padding:0 22px;border-right:1px solid var(--line);display:grid;grid-row:span 2;grid-template-rows:subgrid;align-content:space-between}
-.metrics>div:last-child{border:0}
+.metrics>*{padding:0 22px;white-space:normal;border:0;border-right:1px solid var(--line);border-radius:0;background:none;text-align:left;font-weight:inherit;display:grid;justify-content:stretch;grid-row:span 2;grid-template-rows:subgrid;align-content:space-between}
+.metrics>*:last-child{border:0}
+.metrics>button:hover strong{text-decoration:underline}
+.metrics .bad strong{color:#964222}
+.metrics .warn strong{color:#7a5a17}
 .metrics small,.summary-card small{color:var(--muted);font-size:12px}
 .metrics strong{display:block;font-size:30px;letter-spacing:-1.4px;font-weight:640}
 .dash-pair{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);gap:16px;margin-bottom:20px}
@@ -206,6 +212,11 @@ textarea{width:100%;min-width:0;font:inherit;border:1px solid #c7d1cb;border-rad
 .focus-content h2{font-size:28px;letter-spacing:-1.1px;margin:3px 0}
 .focus-content p{margin:3px 0 17px}
 .focus-card .empty{color:white}
+.focus-card.tone-late{background:#7a3219}
+.focus-card.tone-waiting{background:#6b5216}
+.focus-card:is(.tone-late,.tone-waiting) :is(.focus-label,small,p){color:#fff}
+.focus-card.tone-late .focus-label:before{background:#ffb59a}
+.focus-card.tone-waiting .focus-label:before{background:#f3d27a}
 .focus-card button{color:#1e4538;background:#eef6e9;border:0}
 .summary-card{margin-bottom:0;padding:17px 22px}
 .summary-card .section-head{padding:0}
@@ -237,7 +248,7 @@ textarea{width:100%;min-width:0;font:inherit;border:1px solid #c7d1cb;border-rad
 .top #memberPreview{padding:6px 8px;color:white;border-color:#688277;background:#274a43;font-size:12px}
 
 @media(max-width:700px){.dash-pair{grid-template-columns:1fr}
-.metrics>div{padding:0 10px}
+.metrics>*{padding:0 10px}
 .metrics strong{font-size:22px}
 .metrics small{font-size:11px}
 .top .brand{font-size:17px}
@@ -269,6 +280,7 @@ textarea{width:100%;min-width:0;font:inherit;border:1px solid #c7d1cb;border-rad
   .data.stack td{border:0;padding:4px 0;display:grid;grid-template-columns:110px 1fr;align-items:center;gap:10px}
   .data.stack td::before{content:attr(data-label);font:11px var(--mono);text-transform:uppercase;color:var(--muted)}
   .data.stack td:empty::before{content:none}
+  .data.stack td>.meta-line{grid-column:2}
   .data.stack td>input[type=radio]{justify-self:start;margin:0}
   /* Wide time grids still scroll sideways; keep the person column visible. */
   .load-table td:first-child,.load-table th:first-child{position:sticky;left:0;z-index:1;background:#fff;box-shadow:1px 0 0 var(--line)}
@@ -284,6 +296,9 @@ textarea{width:100%;min-width:0;font:inherit;border:1px solid #c7d1cb;border-rad
 .td-status.s-in-progress{background:#dcefe6;color:#1d6b4c}
 .td-status.s-waiting{background:#f6ecd6;color:#7a5a17}
 .td-status.s-done{background:#e9ece9;color:#4d5a53}
+.td-status.s-on-track{background:#dcefe6;color:#1d6b4c}
+.td-status.s-late{background:#f8e3d9;color:#8a3a1c}
+.td-status{white-space:nowrap;display:inline-block;justify-self:start}
 .td-proj{display:inline-flex;align-items:center;gap:6px;font-weight:620}
 .td-when{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:14px 16px;border-radius:10px;background:var(--tint);color:var(--fg);border-left:4px solid var(--accent)}
 .td-owner{display:flex;align-items:center;gap:10px;min-width:0}
@@ -299,7 +314,7 @@ textarea{width:100%;min-width:0;font:inherit;border:1px solid #c7d1cb;border-rad
 .seg-buffer{background:repeating-linear-gradient(135deg,var(--accent) 0 4px,var(--tint) 4px 8px)}
 .effort-legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:7px}
 .effort-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
-.td-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px}
+.td-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:14px}
 .td-stats>div{border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:grid;gap:2px}
 .td-stats small{font-size:11px;color:var(--muted)}
 .td-stats b{font-size:18px;letter-spacing:-.4px}
@@ -315,8 +330,21 @@ textarea{width:100%;min-width:0;font:inherit;border:1px solid #c7d1cb;border-rad
 .td-jira{margin:12px 0 0}
 .td .task-actions{margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}
 .task-actions .primary{margin-left:auto}
-@media(max-width:700px){.td-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.td-when{flex-wrap:wrap}.td-dates{text-align:left}}
+@media(max-width:700px){.td-when{flex-wrap:wrap}.td-dates{text-align:left}}
 /* Period switch: day / week / month / custom */
 .period-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .period-bar select,.period-bar input[type=date]{width:auto}
 .period b{min-width:150px;text-align:center}
+/* Today in calendars */
+.days .today,.load-table th.today{color:var(--teal);font-weight:700;box-shadow:inset 0 -3px 0 var(--teal)}
+.today-col{background:#1488750f}
+/* Calendar legend: swatches reuse the block styles */
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.legend .block{margin:0;padding:0;width:18px;height:12px;border-radius:3px;flex-shrink:0;cursor:default}
+/* Hours with a share bar (reports) */
+.hbar{display:flex;align-items:center;gap:12px}
+.hbar>span{min-width:66px}
+.hbar>i{flex:1;max-width:280px;height:8px;border-radius:4px;background:linear-gradient(to right,var(--accent,#3f9a83) var(--w),#edf1ec var(--w))}
+.data{font-variant-numeric:tabular-nums}
+@media(max-width:700px){.brand{display:none}.top .tool{min-width:0}}

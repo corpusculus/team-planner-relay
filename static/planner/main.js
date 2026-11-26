@@ -4,7 +4,9 @@ import { estimate, toSlots } from '../../src/shared/estimate.js';
 import { call, openIssue, isLocal } from '../common/backend.js';
 import { $, esc, options, modal } from '../common/ui.js';
 
-const colors = [['#248275', '#d8eee8', '#184e46'], ['#7460a8', '#e9e3f5', '#493c69'], ['#ad7331', '#f5e9d4', '#6e4d24'], ['#4676a4', '#dfeaf5', '#304e70'], ['#aa626b', '#f6e4e5', '#6b3c44'], ['#68813f', '#e8efd9', '#455827']];
+const colors = [['#248275', '#d8eee8', '#184e46'], ['#7460a8', '#e9e3f5', '#493c69'], ['#ad7331', '#f5e9d4', '#6e4d24'], ['#4676a4', '#dfeaf5', '#304e70'], ['#aa626b', '#f6e4e5', '#6b3c44'], ['#68813f', '#e8efd9', '#455827'],
+  ['#a04f93', '#f3e1ef', '#662f5d'], ['#2f8fa3', '#d9eef2', '#1d5a67'], ['#b5553c', '#f7e2db', '#74331f'], ['#5560b8', '#e1e4f7', '#353d7a'], ['#4d9150', '#deefdd', '#2d5c30'], ['#9c8a1f', '#f3efcf', '#5f5410'],
+  ['#6b7785', '#e6e9ed', '#3f4852'], ['#c25f8f', '#f8e2ec', '#7a3556'], ['#8a6248', '#efe4db', '#573c2a']];
 
 // Workspace (set by useWorkspace)
 let settings, today, me, M, people, projects, systems, types, state, plan;
@@ -52,7 +54,8 @@ function periodLabel() {
   const d = (iso, o) => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-GB', { ...o, timeZone: 'UTC' });
   if (period.mode === 'day') return d(period.from, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
   if (period.mode === 'month') return d(period.from, { month: 'long', year: 'numeric' });
-  return d(period.from, { day: 'numeric', month: 'short' }) + ' – ' + d(period.to, { day: 'numeric', month: 'short' });
+  // A week reads Monday–Friday like the calendar columns; weekend entries still count in its totals.
+  return d(period.from, { day: 'numeric', month: 'short' }) + ' – ' + d(period.mode === 'week' ? isoAdd(period.from, 4) : period.to, { day: 'numeric', month: 'short' });
 }
 /** Day / week / month / custom switch with previous, next and today. */
 function periodPicker() {
@@ -62,6 +65,11 @@ function periodPicker() {
       : '<div class="period"><button class="arrow" data-shift="-1" aria-label="Previous">‹</button><b>' + periodLabel() + '</b><button class="arrow" data-shift="1" aria-label="Next">›</button></div><button id="periodToday">Today</button>') + '</div>';
 }
 const startBlocker = t => M.startBlocker(state, plan, t);
+/** Coloured status label; `kind` picks the colour and defaults to the text. */
+const pill = (text, kind = text) => '<span class="td-status s-' + kind.toLowerCase().replace(/ /g, '-') + '">' + text + '</span>';
+const outlookPill = (d, p) => pill(outlookText(d, p), !Number.isFinite(d) ? 'waiting' : d > p.due ? 'late' : 'on-track');
+/** Workday index of today, or -1 on weekends and before the plan starts. */
+const todayDay = () => (today >= settings.general.planStart && M.cal.isWeekday(today) ? M.cal.dayIndex(today) : -1);
 const active = list => list.map((x, i) => [x, i]).filter(([x]) => !x.archived);
 
 async function load(quiet = false) {
@@ -113,13 +121,12 @@ const pageInfo = {
   queue: ['Work queue', 'See what is underway, what can start next, and what needs a decision.'],
   schedule: ['Team calendar', 'Assignments, protected time, and buffers across the team.'],
   coverage: ['Project coverage', 'Primary contacts, backups, and the systems each person covers.'],
-  outlook: ['Project outlook', 'Milestone forecasts, agreed starts, and notes shared with the team.'],
-  rules: ['Planning rules', 'How the team uses this planner and how its forecasts are calculated.']
+  outlook: ['Project outlook', 'Milestone forecasts, agreed starts, and notes shared with the team.']
 };
 
 function render() {
   const pm = role === 'pm', personal = role === 'member';
-  const pages = personal ? ['home', 'schedule', 'sheet', 'report', 'rules'] : pm ? ['outlook', 'schedule', 'report', 'rules'] : ['home', 'queue', 'schedule', 'coverage', 'report', 'rules'];
+  const pages = personal ? ['home', 'schedule', 'sheet', 'report'] : pm ? ['outlook', 'schedule', 'report'] : ['home', 'queue', 'schedule', 'coverage', 'report'];
   if (!pages.includes(tab)) tab = pages[0];
   $('roleBox').hidden = !me.demo; $('role').value = role;
   $('memberPreview').hidden = !me.demo || !personal;
@@ -130,8 +137,9 @@ function render() {
   $('reset').hidden = !(me.demo && role === 'team');
   $('footnote').textContent = me.demo ? 'Demo portfolio · Fictional data · Switch to live mode in Relay settings' : 'Live plan · ' + (state.refreshedAt ? 'Jira refreshed ' + new Date(state.refreshedAt).toLocaleString('en-GB') : 'Not refreshed from Jira yet') + (state.unmapped.length && role === 'team' ? ' · ' + state.unmapped.length + ' Jira issues need mapping (see settings)' : '');
   $('simulate').hidden = !(role === 'team' && ['home', 'queue', 'schedule', 'coverage'].includes(tab) || personal && ['home', 'sheet', 'schedule'].includes(tab));
-  $('simulate').textContent = personal ? (tab === 'schedule' ? 'Protect time' : '＋ Log time') : '＋ Test a change';
-  const title = tab === 'home' ? (personal ? 'My work' : 'Team overview') : tab === 'sheet' ? 'My timesheet' : tab === 'schedule' && personal ? 'My calendar' : tab === 'schedule' && pm ? 'Project calendar' : tab === 'report' ? (personal ? 'My weekly report' : pm ? 'Project report' : 'Team report') : pageInfo[tab][0];
+  $('simulate').textContent = personal ? (tab === 'schedule' ? 'Protect time' : '＋ Log time') : '＋ Add task';
+  $('otherChanges').hidden = $('simulate').hidden || personal;
+  const title = tab === 'home' ? (personal ? 'My work' : 'Team overview') : tab === 'sheet' ? 'My timesheet' : tab === 'schedule' && personal ? 'My calendar' : tab === 'schedule' && pm ? 'Project calendar' : tab === 'report' ? (personal ? 'My report' : pm ? 'Project report' : 'Team report') : pageInfo[tab][0];
   $('title').textContent = title;
   const counts = active(people).length + ' people across ' + active(projects).length + ' projects';
   $('intro').textContent = tab === 'home' ? (personal ? who(member).name + ' · ' + (who(member).role || 'Team member') : counts + '. Review available capacity and work that needs a decision.') : tab === 'report' ? (pm ? 'Project hours and delivery outlook for the chosen period.' : personal ? 'Your recorded work for the chosen period.' : 'Hours by person and project for the chosen period.') : (pm && tab === 'schedule' ? 'Who works on your projects and when, and where they are free. Their other work shows as busy time.' : personal && tab === 'schedule' ? 'Your assignments, protected time, and troubleshooting reserves.' : pageInfo[tab][1]);
@@ -140,7 +148,7 @@ function render() {
     if (k === 'home') btn.textContent = personal ? 'My work' : 'Overview';
     btn.classList.toggle('active', k === tab); btn.setAttribute('aria-current', k === tab ? 'page' : 'false');
   }
-  const views = { home: personal ? memberHome : managerHome, queue: queueView, schedule: () => (role === 'pm' ? pmCalendarHeader() : board() + (role === 'team' ? milestones() : '')), coverage, outlook: pmView, sheet: timesheetView, report: reportView, rules: rulesView };
+  const views = { home: personal ? memberHome : managerHome, queue: queueView, schedule: () => (role === 'pm' ? pmCalendarHeader() : board()), coverage, outlook: pmView, sheet: timesheetView, report: reportView };
   $('view').innerHTML = views[tab]();
   // Phones show table rows as labelled blocks (CSS .stack); labels come from the header cells.
   for (const table of $('view').querySelectorAll('table.data:not(.load-table)')) {
@@ -154,8 +162,11 @@ function board() {
   // A project manager sees the people on their project; work on other projects only as busy time.
   const pmMode = role === 'pm', mine = pmMode ? (pmCal === 'all' ? me.pmProjects : [Number(pmCal)]) : [];
   const onProject = w => mine.some(i => projects[i] && (w === projects[i].lead || w === projects[i].back)) || state.tasks.some(t => mine.includes(t.p) && plan.get(t.id)?.who === w);
-  const busy = '<div class="block other" style="STYLE"><b>Other work</b><small>Busy</small></div>';
-  const [d0, d1] = periodDays(), days = Math.max(0, d1 - d0 + 1), start = d0 * spd, cols = days * spd;
+  const busy = '<div class="block other" style="STYLE" title="Busy with other work"><b>Other work</b><small>Busy</small></div>';
+  const [d0, d1] = periodDays(), days = Math.max(0, d1 - d0 + 1), start = d0 * spd, cols = days * spd, dense = days > 10;
+  /** A block that is not a task: its two lines double as the hover text, since narrow blocks cut them off. */
+  const plain = (css, title, sub, attrs = '') => '<' + (attrs ? 'button' : 'div') + ' class="block ' + css + '" ' + attrs + ' style="STYLE" title="' + esc(title + ' · ' + sub) + '"><b>' + esc(title) + '</b><small>' + esc(sub) + '</small></' + (attrs ? 'button' : 'div') + '>';
+  const t0 = (todayDay() - d0) * spd, todayCol = t0 >= 0 && t0 < cols ? '<i class="today-col" style="grid-row:1;grid-column:' + (t0 + 1) + '/span ' + spd + '"></i>' : '';
   const rows = people.map((p, w) => {
     if (p.archived || (role === 'member' && w !== member) || (role === 'pm' && !onProject(w))) return '';
     const blocks = [];
@@ -175,11 +186,11 @@ function board() {
         if (x.who === w && Number.isFinite(x.start)) addWorking(x.start, x.end, busy);
         continue;
       }
-      for (const h of t.history || []) if (h.who === w) add(h.start, h.end, '<button class="block done" data-task="' + t.id + '" style="STYLE' + color(t.p) + '"><b>' + esc(projects[t.p].name) + '</b><small>Worked · ' + esc(t.name) + '</small></button>');
+      for (const h of t.history || []) if (h.who === w) add(h.start, h.end, '<button class="block done" data-task="' + t.id + '" style="STYLE' + color(t.p) + '" title="' + esc(projects[t.p].name + ' · Worked · ' + t.name) + '"><b>' + esc(projects[t.p].name) + '</b><small>Worked · ' + esc(t.name) + '</small></button>');
       const x = plan.get(t.id);
       if (!Number.isFinite(x.start)) {
         const fixed = state.fixed.find(f => f.taskId === t.id);
-        if (fixed && t.firstStart == null && x.who === w) add(fixed.start, fixed.start + duration(t), '<button class="block meeting fixed" data-task="' + t.id + '" style="STYLE' + color(t.p) + '"><b>' + esc(projects[t.p].name) + '</b><small>Fixed start · At risk</small></button>');
+        if (fixed && t.firstStart == null && x.who === w) add(fixed.start, fixed.start + duration(t), '<button class="block meeting fixed" data-task="' + t.id + '" style="STYLE' + color(t.p) + '" title="' + esc(projects[t.p].name + ' · ' + t.name + ' · Fixed start · At risk') + '"><b>' + esc(projects[t.p].name) + '</b><small>Fixed start · At risk</small></button>');
         continue;
       }
       if (x.who !== w) continue;
@@ -189,25 +200,27 @@ function board() {
       addWorking(x.start, workEnd, card((fixed ? 'meeting fixed ' : '') + (t.actual != null ? 'done' : ''), projects[t.p].name, label + t.name));
       if (workEnd < x.end) addWorking(workEnd, x.end, card('buffer', 'Buffer', projects[t.p].name + ' · ' + t.name));
     }
-    for (const block of state.privateTime.filter(x => x.who === w)) add(block.start, block.start + block.len, pmMode ? '<div class="block private" style="STYLE"><b>Unavailable</b><small>Private time</small></div>' : '<button class="block private" data-private="' + block.id + '" style="STYLE"><b>Private time</b><small>' + esc(block.name) + '</small></button>');
+    for (const block of state.privateTime.filter(x => x.who === w)) add(block.start, block.start + block.len, pmMode ? plain('private', 'Unavailable', 'Private time') : plain('private', dense ? 'Private' : 'Private time', block.name, 'data-private="' + block.id + '"'));
     const away = new Set();
     for (const l of state.leave.filter(l => l.who === w)) for (let d = l.start; d < l.start + l.len; d++) away.add(d);
-    for (let d = start; d < start + cols; d++) { if (!away.has(d)) continue; let e = d + 1; while (e < start + cols && away.has(e)) e++; add(d, e, '<div class="block away" style="STYLE"><b>Time off</b><small>Unavailable</small></div>'); d = e - 1; }
-    for (let d = start; d < start + cols; d++) { if (!off(w, d)) continue; let e = d + 1; while (e < start + cols && off(w, e)) e++; add(d, e, '<div class="block away" style="STYLE"><b>' + (M.isHoliday(d) ? 'Holiday' : 'Not working') + '</b><small>' + (M.isHoliday(d) ? 'Public holiday' : 'Outside working hours') + '</small></div>'); d = e - 1; }
+    for (let d = start; d < start + cols; d++) { if (!away.has(d)) continue; let e = d + 1; while (e < start + cols && away.has(e)) e++; add(d, e, plain('away', 'Time off', 'Unavailable')); d = e - 1; }
+    for (let d = start; d < start + cols; d++) { if (!off(w, d)) continue; let e = d + 1; while (e < start + cols && off(w, e)) e++; add(d, e, M.isHoliday(d) ? plain('away', 'Holiday', 'Public holiday') : plain('away', dense ? 'Off' : 'Not working', 'Outside working hours')); d = e - 1; }
     // Free time from now on, so managers can see where a task fits; clicking it starts "Add a task" there.
     const load = role === 'member' ? [] : loadSlots(start, cols, w).map((k, i) => (k === 'free' && start + i < M.now ? 'past' : k));
-    for (let d = 0; d < load.length; d++) { if (load[d] !== 'free') continue; let e = d + 1; while (e < load.length && load[e] === 'free') e++; add(start + d, start + e, '<button class="block free" data-free-who="' + w + '" data-free-start="' + (start + d) + '" data-free-hours="' + (e - d) * slotH + '" style="STYLE" title="Add a task here"><b>Free · ' + (e - d) * slotH + 'h</b><small>Add a task</small></button>'); d = e - 1; }
+    for (let d = 0; d < load.length; d++) { if (load[d] !== 'free') continue; let e = d + 1; while (e < load.length && load[e] === 'free') e++; add(start + d, start + e, '<button class="block free" data-free-who="' + w + '" data-free-start="' + (start + d) + '" data-free-hours="' + (e - d) * slotH + '" style="STYLE" title="Free · ' + (e - d) * slotH + 'h · Add a task here"><b>Free · ' + (e - d) * slotH + 'h</b><small>Add a task</small></button>'); d = e - 1; }
     const freeHours = load.filter(k => k === 'free').length * slotH;
-    return '<div class="person grid"><div class="who"><span class="avatar">' + esc(p.initials) + '</span><div><b>' + esc(p.name) + '</b><small>' + (role === 'member' ? esc(p.role || '') : '<span class="free-h">' + freeHours + 'h free</span>') + '</small></div></div><div class="lane" style="grid-template-columns:repeat(' + cols + ',minmax(0,1fr))">' + blocks.join('') + '</div></div>';
+    return '<div class="person grid"><div class="who"><span class="avatar">' + esc(p.initials) + '</span><div><b>' + esc(p.name) + '</b><small>' + (role === 'member' ? esc(p.role || '') : '<span class="free-h">' + freeHours + 'h free</span>') + '</small></div></div><div class="lane" style="grid-template-columns:repeat(' + cols + ',minmax(0,1fr))">' + todayCol + blocks.join('') + '</div></div>';
   }).join('');
-  const head = '<div class="section-head"><div class="row"><h2>' + periodLabel() + '</h2>' + (start <= M.now && M.now < start + cols ? '<span class="tag">Now</span>' : '') + '</div>' + periodPicker() + '</div>';
+  const key = (css, text) => '<span><i class="block ' + css + '"></i>' + text + '</span>';
+  const legend = '<div class="legend" style="' + color(0) + '">' + key('', 'Planned work') + key('buffer', 'Buffer for troubleshooting') + key('private', 'Private time') + key('away', 'Away or not working') + (pmMode ? key('other', 'Other work') : '') + (role === 'member' ? '' : key('free', 'Free')) + '<span>' + slotH + 'h slots</span></div>';
+  const head = '<div class="section-head">' + periodPicker() + '</div>';
   if (!days) return '<section class="panel">' + head + '<p class="empty">No workdays in this period.</p></section>';
-  return '<section class="panel">' + head + '<div class="scroll"><div class="board" style="--days:' + days + ';min-width:' + Math.max(750, 175 + days * (days > 10 ? 84 : 110)) + 'px"><div class="grid days"><div>Team member</div>' + Array.from({ length: days }, (_, i) => '<div>' + fmt(start + i * spd, { weekday: 'short', day: 'numeric' }) + (M.isHoliday(start + i * spd) ? ' · Holiday' : '') + '</div>').join('') + '</div>' + rows + '</div></div><div class="foot"><span>Striped task buffers reserve time for troubleshooting · ' + slotH + 'h slots</span></div></section>';
+  return '<section class="panel">' + head + '<div class="scroll"><div class="board" style="--days:' + days + ';min-width:' + Math.max(750, 175 + days * (dense ? 100 : 110)) + 'px"><div class="grid days"><div>Team member</div>' + Array.from({ length: days }, (_, i) => '<div' + (d0 + i === todayDay() ? ' class="today"' : '') + '>' + fmt(start + i * spd, { weekday: 'short', day: 'numeric' }) + (d0 + i === todayDay() ? ' · Today' : '') + (M.isHoliday(start + i * spd) ? ' · Holiday' : '') + '</div>').join('') + '</div>' + rows + '</div></div><div class="foot">' + legend + '</div></section>';
 }
 
 function milestones() {
   const indices = active(projects).map(([, i]) => i).filter(i => filter === 'all' || String(i) === filter), list = showAll ? indices : indices.slice(0, 5);
-  return '<section class="panel"><div class="section-head"><div><h2>Project milestones</h2><p>Forecast completion of each project’s planned work.</p></div><select id="filter" aria-label="Filter milestones by project"><option value="all">All projects</option>' + active(projects).map(([p, i]) => '<option value="' + i + '" ' + (filter === String(i) ? 'selected' : '') + '>' + esc(p.name) + '</option>').join('') + '</select></div><div class="scroll"><table class="data"><thead><tr><th>Project</th><th>Primary</th><th>Requested by</th><th>Forecast</th><th>Outlook</th></tr></thead><tbody>' + list.map(i => { const d = finish(state, plan, i), p = projects[i]; return '<tr><td>' + projectLink(i) + '</td><td>' + esc(who(p.lead).short) + '</td><td>' + dueText(p) + '</td><td>' + fmt(d) + '</td><td class="' + (d > p.due ? 'late' : 'status') + '">' + outlookText(d, p) + '</td></tr>'; }).join('') + '</tbody></table></div>' + (indices.length > 5 ? '<div class="foot"><span>' + list.length + ' of ' + indices.length + ' projects</span><button class="link" id="more">' + (showAll ? 'Show fewer' : 'Show all projects') + '</button></div>' : '') + '</section>';
+  return '<section class="panel" id="milestones"><div class="section-head"><div><h2>Project milestones</h2><p>Forecast completion of each project’s planned work.</p></div><select id="filter" aria-label="Filter milestones by project"><option value="all">All projects</option>' + active(projects).map(([p, i]) => '<option value="' + i + '" ' + (filter === String(i) ? 'selected' : '') + '>' + esc(p.name) + '</option>').join('') + '</select></div><div class="scroll"><table class="data"><thead><tr><th>Project</th><th>Primary</th><th>Requested by</th><th>Forecast</th><th>Outlook</th></tr></thead><tbody>' + list.map(i => { const d = finish(state, plan, i), p = projects[i]; return '<tr><td>' + projectLink(i) + '</td><td>' + esc(who(p.lead).short) + '</td><td>' + dueText(p) + '</td><td>' + fmt(d) + '</td><td>' + outlookPill(d, p) + '</td></tr>'; }).join('') + '</tbody></table></div>' + (indices.length > 5 ? '<div class="foot"><span>' + list.length + ' of ' + indices.length + ' projects</span><button class="link" id="more">' + (showAll ? 'Show fewer' : 'Show all projects') + '</button></div>' : '') + '</section>';
 }
 function coverage() {
   return '<section class="panel"><div class="section-head"><div><h2>Project contacts</h2><p>Select a project for system-level coverage and scheduled tasks.</p></div></div><div class="scroll"><table class="data"><thead><tr><th>Project</th><th>Primary</th><th>Backup</th><th>Systems</th></tr></thead><tbody>' + active(projects).map(([p, i]) => '<tr><td>' + projectLink(i) + '</td><td>' + esc(who(p.lead).name) + '</td><td>' + (p.back === null ? 'No backup' : esc(who(p.back).name)) + '</td><td>' + p.systems.length + '</td></tr>').join('') + '</tbody></table></div></section>';
@@ -228,27 +241,10 @@ function queueView() {
   }
   function row(t) {
     const x = plan.get(t.id);
-    return '<tr><td><button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button><small class="meta-line">' + esc(projects[t.p].name) + ' / ' + esc(systems[t.s]) + keyTag(t) + '</small></td><td>' + esc(who(x.who).name) + (assigneeNote(t, x) ? '<small class="meta-line">⚠ ' + esc(assigneeNote(t, x)) + '</small>' : '') + '</td><td>' + span(x.start, x.end - 1) + '</td><td>' + statusOf(t) + '</td></tr>';
+    return '<tr><td><button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button><small class="meta-line">' + esc(projects[t.p].name) + ' / ' + esc(systems[t.s]) + keyTag(t) + '</small></td><td>' + esc(who(x.who).name) + (assigneeNote(t, x) ? '<small class="meta-line">⚠ ' + esc(assigneeNote(t, x)) + '</small>' : '') + '</td><td>' + span(x.start, x.end - 1) + '</td><td>' + pill(statusOf(t)) + '</td></tr>';
   }
   const table = group => '<div class="scroll"><table class="data"><thead><tr><th>Task and system</th><th>Owner</th><th>Work window</th><th>State</th></tr></thead><tbody>' + group.map(row).join('') + '</tbody></table></div>';
-  return '<div class="queue-tools"><label>Team member <select id="personFilter">' + options([['all', 'Everyone'], ...active(people).map(([p, i]) => [i, p.name])], personFilter) + '</select></label><button id="addQueued">＋ Add task</button></div><div class="swimlanes">' + lane('In progress', 'running', running, 'No active work for this selection.') + lane('Next to start', 'ready', ready, 'Upcoming work is waiting for capacity or a prerequisite.') + lane('Waiting', 'waiting', waiting, 'No external blockers recorded.') + '</div><section class="panel"><div class="section-head"><div><h2>Portfolio queue</h2><p>Tasks in priority order, including dependent work.</p></div><span class="sub">' + items.length + ' tasks</span></div>' + (items.length ? table(items.slice(0, 5)) : '<p class="empty">No tasks yet. ' + (me.demo ? '' : 'Use Refresh from Jira, or add a task.') + '</p>') + (items.length > 5 ? '<details><summary class="more-summary">Show remaining ' + (items.length - 5) + ' tasks</summary>' + table(items.slice(5)) + '</details>' : '') + '</section>';
-}
-
-function rulesView() {
-  const g = settings.general;
-  const rules = [
-    ['Choose work', 'Members open My work for their current task and upcoming assignments. The team manager uses Work queue to see active, ready, and waiting work across projects. Open an assignment to start on its forecast slot.'],
-    ['Hours and slots', 'Effort is entered in hours and planned in ' + g.slotHours + '-hour slots, ' + g.workdayHours / g.slotHours + ' per ' + g.workdayHours + '-hour workday. Estimates round up to a whole slot, so a person never carries more than ' + g.workdayHours / g.slotHours + ' tasks in a day.'],
-    ['Days off', 'Public holidays and each person’s working days and hours come from Relay settings. Work is planned only in the slots someone works and pauses over days off.'],
-    ['How estimates are made', 'Each task type has a base effort and buffer. Relay first looks for at least ' + g.minSamples + ' finished tasks of the same type in the last ' + g.historyMonths + ' months: same project and system, then same system, then any. The estimate is the P' + g.estimatePercentile + ' of their actual hours and the buffer runs to P' + g.bufferPercentile + '. Without history it uses the type default × system size × complexity factors such as data transfer or VPN access. Types can instead take Jira’s original estimate or story points.'],
-    ['Work and buffer', 'Enter the clear-sky effort for hands-on work. Adjust its buffer for known uncertainty. Troubleshooting uses the reserve first. Record total hands-on hours at completion; this releases unused time and teaches the estimator.'],
-    ['Waiting for someone else', 'From an active task choose Mark waiting. Record the work already performed and what will unblock it. The remaining work stops reserving capacity. Its dependent dates show Pending. Resolve the blocker to put the remaining work back in the queue.'],
-    ['Forecasts and commitments', 'A forecast can move when work, priority, or availability changes. Set a fixed start only when a date has been agreed. Preview the effect of changes before applying them. A fixed start with an unresolved prerequisite is at risk.'],
-    ['Private time and coverage', 'The team can reserve private work and record absences under Test a change. The planner uses qualified project contacts and gives the primary contact the tie. Project managers see the forecast, shared note, and agreed starts.'],
-    ['Timesheets and reports', timeInJira ? 'Time is logged only in Jira: Log time adds a Jira work log on the issue' + (settings.general.internalIssue ? ', and internal work goes on ' + esc(settings.general.internalIssue) : '') + '. The timesheet and reports read those work logs back. Team managers see totals by person and project, project managers see their project, and Export CSV downloads the week.' : 'Members record actual time by day and task. Internal work has its own category. Members can correct their entries. Team managers see totals by person and project. Project managers see aggregate project hours. Entry notes are personal. Export CSV downloads the week.'],
-    me.demo ? ['Using the demo', 'This is fictional data. Demo view lets you try the three roles. A Jira administrator can connect real Jira projects in Relay settings.'] : ['Jira', 'Tasks come from the connected Jira projects and are read-only in Jira. Jira workflow status stays in Jira; Relay’s start, waiting and finish actions are planning events. Refresh from Jira to pick up new issues.']
-  ];
-  return '<div class="rules-grid">' + rules.map(([title, body]) => '<article class="rule"><h2>' + title + '</h2><p>' + body + '</p></article>').join('') + '</div>';
+  return '<div class="queue-tools"><label>Team member <select id="personFilter">' + options([['all', 'Everyone'], ...active(people).map(([p, i]) => [i, p.name])], personFilter) + '</select></label></div><div class="swimlanes">' + lane('In progress', 'running', running, 'No active work for this selection.') + lane('Next to start', 'ready', ready, 'Upcoming work is waiting for capacity or a prerequisite.') + lane('Waiting', 'waiting', waiting, 'No external blockers recorded.') + '</div><section class="panel"><div class="section-head"><div><h2>Portfolio queue</h2><p>Tasks in priority order, including dependent work.</p></div><span class="sub">' + items.length + ' tasks</span></div>' + (items.length ? table(items.slice(0, 5)) : '<p class="empty">No tasks yet. ' + (me.demo ? '' : 'Use Refresh from Jira, or add a task.') + '</p>') + (items.length > 5 ? '<details><summary class="more-summary">Show remaining ' + (items.length - 5) + ' tasks</summary>' + table(items.slice(5)) + '</details>' : '') + '</section>';
 }
 
 function taskDetail(id) {
@@ -275,7 +271,7 @@ function taskCard(t, x, actions, blocker) {
   const deps = (t.deps ?? []).map(d => state.tasks.find(z => z.id === d)).filter(Boolean);
   const label = text => '<div class="td-label">' + text + '</div>';
   return '<div class="td" style="' + color(t.p) + '">' +
-    '<div class="td-head"><span class="td-status s-' + status.toLowerCase().replace(' ', '-') + '">' + status + '</span><span class="td-proj"><i class="dot"></i>' + esc(projects[t.p].name) + ' / ' + esc(systems[t.s]) + '</span>' + (t.key ? '<span class="tag">' + esc(t.key) + '</span>' : '') + (types[t.type] ? '<span class="tag">' + esc(types[t.type].name) + '</span>' : '') + '</div>' +
+    '<div class="td-head">' + pill(status) + '<span class="td-proj"><i class="dot"></i>' + esc(projects[t.p].name) + ' / ' + esc(systems[t.s]) + '</span>' + (t.key ? '<span class="tag">' + esc(t.key) + '</span>' : '') + (types[t.type] ? '<span class="tag">' + esc(types[t.type].name) + '</span>' : '') + '</div>' +
     '<div class="td-when"><div class="td-owner">' + avatar(x.who) + '<div><b>' + esc(owner.name) + '</b><small>' + esc(owner.role || 'Planned owner') + '</small></div></div><div class="td-dates"><small>Forecast</small><b>' + span(x.start, x.end - 1) + '</b><small>' + (days ? days + ' workday' + (days === 1 ? '' : 's') : t.wait ? 'Paused' : 'After its prerequisites') + '</small></div></div>' +
     (t.wait ? '<p class="wait-note"><b>Waiting for</b> ' + esc(t.wait.reason) + '</p>' : '') +
     (t.gone ? '<p class="td-warn">No longer in the Jira filter.</p>' : '') +
@@ -283,7 +279,7 @@ function taskCard(t, x, actions, blocker) {
     label('Effort') +
     '<div class="effort-bar" role="img" aria-label="' + segments.map(([n, , l]) => l + ' ' + hrs(n)).join(', ') + '">' + segments.filter(([n]) => n > 0).map(([n, k]) => '<span class="seg seg-' + k + '" style="width:' + pct(n) + '"></span>').join('') + '</div>' +
     '<div class="effort-legend">' + segments.map(([n, k, l]) => '<span><i class="seg-' + k + '"></i>' + l + ' ' + hrs(n) + '</span>').join('') + '</div>' +
-    '<div class="td-stats">' + [['Clear-sky effort', hrs(t.work)], ['Original buffer', hrs(t.buffer)], [t.actual != null ? 'Actual effort' : 'Expected work', hrs(t.actual ?? expected)], ['Buffer left', hrs(bufferLeft)]].map(([l, v]) => '<div><small>' + l + '</small><b>' + v + '</b></div>').join('') + '</div>' +
+    '<div class="td-stats">' + [['Estimated work', hrs(t.work)], ['Planned buffer', hrs(t.buffer)]].map(([l, v]) => '<div><small>' + l + '</small><b>' + v + '</b></div>').join('') + '</div>' +
     '<p class="source">Estimate: ' + esc(t.source || '—') + '</p>' +
     label('Who can do it') + '<div class="chip-row">' + (eligible(t).map(w => '<span class="person-chip' + (w === x.who ? ' on' : '') + '">' + avatar(w) + esc(people[w].name) + '</span>').join('') || '<span class="sub">Nobody covers this system.</span>') + '</div>' +
     label('Depends on') + '<div class="chip-row">' + (deps.map(d => '<span class="dep-chip' + (d.actual != null ? ' ok' : '') + '">' + (d.actual != null ? '✓ ' : '○ ') + esc(d.name) + '</span>').join('') || '<span class="sub">Nothing — ready when its owner is free.</span>') + '</div>' +
@@ -301,7 +297,7 @@ function values() { return Object.fromEntries(new FormData($('changeForm'))); }
 const hourInput = (label, key, hours, min) => '<label class="field">' + label + '<input type="number" required min="' + min + '" step="' + slotH + '" max="8760" name="' + key + '" value="' + Number(hours) + '"></label>';
 
 function changeForm(v = {}) {
-  const kind = v.kind || 'urgent', p = Number(v.p ?? (role === 'pm' ? me.pmProjects[0] : active(projects)[0]?.[1]) ?? 0);
+  const kind = v.kind || 'queued', isTask = kind === 'urgent' || kind === 'queued', p = Number(v.p ?? (role === 'pm' ? me.pmProjects[0] : active(projects)[0]?.[1]) ?? 0);
   const dates = Array.from({ length: (endWeek() + 2) * weekSlots }, (_, i) => i).filter(i => i >= M.now).map(i => [i, slotLabel(i)]);
   const dayDates = dates.filter(([i]) => i % spd === 0).map(([i]) => [i, fmt(i, { weekday: 'short', month: 'short', day: 'numeric' })]);
   const hourChoices = Array.from({ length: 20 }, (_, i) => [(i + 1) * slotH, (i + 1) * slotH + 'h']);
@@ -309,7 +305,7 @@ function changeForm(v = {}) {
   const footer = '<div class="actions"><button type="button" data-dismiss>Cancel</button><button class="primary" type="submit">Preview impact →</button></div>';
   if (['estimate', 'finish', 'revise'].includes(kind)) {
     const t = state.tasks.find(t => t.id === v.taskId);
-    const fields = kind === 'estimate' ? hourInput('Clear-sky hours', 'hours', v.hours ?? t.work * slotH, slotH) + hourInput('Buffer hours', 'buffer', v.buffer ?? t.buffer * slotH, 0) : hourInput(kind === 'finish' ? 'Actual hours from start' : 'Expected total hours from start', 'hours', v.hours ?? effectiveWork(t) * slotH, slotH);
+    const fields = kind === 'estimate' ? hourInput('Estimated hours', 'hours', v.hours ?? t.work * slotH, slotH) + hourInput('Buffer hours', 'buffer', v.buffer ?? t.buffer * slotH, 0) : hourInput(kind === 'finish' ? 'Actual hours from start' : 'Expected total hours from start', 'hours', v.hours ?? effectiveWork(t) * slotH, slotH);
     modal(kind === 'estimate' ? 'Edit estimate' : kind === 'finish' ? 'Record finish' : 'Update expected duration', '<p>' + esc(projects[t.p].name) + ' · ' + esc(t.name) + '</p><form id="changeForm"><input type="hidden" name="kind" value="' + kind + '"><input type="hidden" name="taskId" value="' + t.id + '"><div class="formgrid">' + fields + '</div><p class="sub">' + (kind === 'finish' ? 'Recording completion releases any unused reserve and adds this task to the estimation history.' : 'Hours round up to ' + slotH + 'h slots. The forecast includes the work and any remaining reserve.') + '</p>' + footer + '</form>');
     return;
   }
@@ -326,14 +322,14 @@ function changeForm(v = {}) {
     modal('Task timing', '<p><b>' + esc(projects[task.p].name) + ' · ' + esc(task.name) + '</b><br>Currently planned for ' + slotLabel(plan.get(task.id).start) + '.</p><form id="changeForm"><input type="hidden" name="kind" value="timing"><input type="hidden" name="taskId" value="' + task.id + '"><label class="field">Fixed start date (optional)<input type="date" name="stamp" min="' + settings.general.planStart + '" value="' + esc(stamp) + '"></label><p class="sub">Use an agreed date to anchor the start and share this task and date with the PM. Leave blank for flexible scheduling.</p>' + footer + '</form>');
     return;
   }
-  let fields = role === 'pm' ? '<input type="hidden" name="kind" value="queued">' : role === 'member' && kind === 'private' ? '<input type="hidden" name="kind" value="private"><input type="hidden" name="who" value="' + member + '">' : selectField('Change to test', 'kind', [['queued', 'Add a task to the queue'], ['urgent', 'Add an urgent task'], ['leave', 'Mark a person away'], ...(state.tasks.some(t => t.actual == null) ? [['extend', 'Extend an existing task']] : []), ['private', 'Protect private team time']], kind, true);
-  if (kind === 'urgent' || kind === 'queued') {
+  let fields = role === 'pm' ? '<input type="hidden" name="kind" value="queued">' : role === 'member' && kind === 'private' ? '<input type="hidden" name="kind" value="private"><input type="hidden" name="who" value="' + member + '">' : isTask ? selectField('Priority', 'kind', [['queued', 'Normal: joins the queue'], ['urgent', 'Urgent: goes first']], kind, true) : selectField('Change', 'kind', [['leave', 'Mark a person away'], ...(state.tasks.some(t => t.actual == null) ? [['extend', 'Extend an existing task']] : []), ['private', 'Protect private team time']], kind, true);
+  if (isTask) {
     const typeList = active(types), type = Number(v.type ?? typeList[typeList.length - 1]?.[1] ?? 0);
     const sys = projects[p]?.systems ?? [], s = sys.includes(Number(v.s)) ? Number(v.s) : sys.includes(types[type]?.system) ? types[type].system : sys[0];
     const est = s == null ? null : estimate(settings, { type, p, s }, state.completed, today);
     const estHours = est ? Math.max(1, toSlots(est.hours, slotH)) * slotH : slotH, estBuffer = est ? toSlots(est.buffer, slotH) * slotH : 0;
     fields += selectField('Task type', 'type', typeList.map(([a, i]) => [i, a.name]), type, true);
-    fields += '<label class="field full">Task name<input required maxlength="70" name="name" value="' + esc(v.name ?? (kind === 'urgent' ? 'Urgent ' + types[type].name.toLowerCase() : types[type].name)) + '"></label>' + selectField('Project', 'p', active(projects).filter(([, i]) => role !== 'pm' || me.pmProjects.includes(i)).map(([x, i]) => [i, x.name]), p) + selectField('System', 's', sys.map(x => [x, systems[x]]), s) + selectField('Earliest start', 'start', dates, v.start ?? Math.max(periodDays()[0] * spd, M.now)) + hourInput('Clear-sky hours', 'hours', v.keepHours ? v.hours : estHours, slotH) + hourInput('Buffer hours', 'buffer', v.keepHours ? v.buffer : estBuffer, 0) + (v.prefer != null && v.prefer !== '' ? '<input type="hidden" name="prefer" value="' + esc(v.prefer) + '"><input type="hidden" name="fit" value="' + esc(v.fit ?? '') + '"><p class="source full">Preferred owner: ' + esc(who(Number(v.prefer)).name) + ', from ' + slotLabel(Number(v.start)) + '</p>' + (v.fit && estHours + estBuffer > Number(v.fit) ? '<p class="td-warn full">This free time holds ' + v.fit + 'h, but the task needs ' + (estHours + estBuffer) + 'h with buffer. Work is planned as one block, so it will start later. Shorten it to fit, or check the preview.</p>' : '') : '') + '<input type="hidden" name="source" value="' + esc(est?.source ?? '') + '"><input type="hidden" name="estHours" value="' + estHours + '"><p class="source full">' + (est ? 'Suggested: ' + estHours + 'h + ' + estBuffer + 'h buffer · ' + esc(est.source) : 'Nobody on this project covers a system yet.') + '</p>';
+    fields += '<label class="field full">Task name<input required maxlength="70" name="name" value="' + esc(v.name ?? (kind === 'urgent' ? 'Urgent ' + types[type].name.toLowerCase() : types[type].name)) + '"></label>' + selectField('Project', 'p', active(projects).filter(([, i]) => role !== 'pm' || me.pmProjects.includes(i)).map(([x, i]) => [i, x.name]), p) + selectField('System', 's', sys.map(x => [x, systems[x]]), s) + selectField('Earliest start', 'start', dates, v.start ?? Math.max(periodDays()[0] * spd, M.now)) + hourInput('Estimated hours', 'hours', v.keepHours ? v.hours : estHours, slotH) + hourInput('Buffer hours', 'buffer', v.keepHours ? v.buffer : estBuffer, 0) + (v.prefer != null && v.prefer !== '' ? '<input type="hidden" name="prefer" value="' + esc(v.prefer) + '"><input type="hidden" name="fit" value="' + esc(v.fit ?? '') + '"><p class="source full">Preferred owner: ' + esc(who(Number(v.prefer)).name) + ', from ' + slotLabel(Number(v.start)) + '</p>' + (v.fit && estHours + estBuffer > Number(v.fit) ? '<p class="td-warn full">This free time holds ' + v.fit + 'h, but the task needs ' + (estHours + estBuffer) + 'h with buffer. Work is planned as one block, so it will start later. Shorten it to fit, or check the preview.</p>' : '') : '') + '<input type="hidden" name="source" value="' + esc(est?.source ?? '') + '"><input type="hidden" name="estHours" value="' + estHours + '"><p class="source full">' + (est ? 'Suggested: ' + estHours + 'h + ' + estBuffer + 'h buffer · ' + esc(est.source) : 'Nobody on this project covers a system yet.') + '</p>';
   }
   if (kind === 'private') {
     const block = state.privateTime.find(b => b.id === v.blockId);
@@ -344,8 +340,8 @@ function changeForm(v = {}) {
   }
   if (kind === 'leave') fields += selectField('Team member', 'who', active(people).map(([x, i]) => [i, x.name]), v.who ?? 0, true) + selectField('First day away', 'start', dayDates, v.start ?? Math.max(periodDays()[0] * spd, M.now)) + selectField('Time away', 'days', dayChoices, v.days ?? 2);
   if (kind === 'extend') fields += selectField('Task', 'taskId', state.tasks.filter(t => t.actual == null).map(t => [t.id, projects[t.p].name + ' · ' + t.name]), v.taskId, true) + selectField('Additional expected hours', 'hours', hourChoices, v.hours ?? slotH, true);
-  const adding = role === 'pm' || v.prefer != null;
-  modal(adding ? 'Add a task' : 'Test a change', '<p>' + (adding ? 'Preview where it lands and what it moves before you apply it.' : 'Preview the effect on the published schedule. You decide whether to apply it.') + '</p><form id="changeForm"><div class="formgrid">' + fields + '</div>' + footer + '</form>');
+  const adding = isTask;
+  modal(adding ? 'Add a task' : role === 'member' ? 'Protect time' : 'Change the plan', '<p>' + (adding ? 'Preview where it lands and what it moves before you apply it.' : 'Preview the effect on the published schedule. You decide whether to apply it.') + '</p><form id="changeForm"><div class="formgrid">' + fields + '</div>' + footer + '</form>');
 }
 
 function preview(v) {
@@ -370,11 +366,17 @@ async function pushToJira(taskId, field) {
   catch (e) { modal('Jira was not updated', '<p>' + esc(e.message) + '</p><div class="actions"><button data-dismiss>Close</button></div>'); }
   finally { busy = false; }
 }
-function announce(text) { $('notice').textContent = text || ''; }
+let noticeTimer;
+function announce(text) {
+  $('notice').textContent = text || '';
+  clearTimeout(noticeTimer);
+  if (text) noticeTimer = setTimeout(() => { $('notice').textContent = ''; }, 6000);
+}
 
 $('modal').addEventListener('close', () => { draft = null; formValues = null; });
 $('close').onclick = () => $('modal').close();
 $('simulate').onclick = () => (role === 'member' ? (tab === 'schedule' ? changeForm({ kind: 'private', who: member }) : logForm()) : changeForm());
+$('otherChanges').onclick = () => changeForm({ kind: 'leave' });
 $('reset').onclick = () => modal('Reset sample plan?', '<p>This restores the original assignments and time off and removes the changes you applied to the demo.</p><div class="actions"><button data-dismiss>Cancel</button><button id="confirmReset" class="primary">Reset demo</button></div>');
 $('settingsLink').onclick = () => { location.href = '../settings/'; };
 $('refresh').onclick = async () => {
@@ -387,7 +389,8 @@ for (const k of Object.keys(pageInfo)) $(k + 'Tab').onclick = () => { tab = k; a
 document.addEventListener('change', e => {
   const id = e.target.id;
   if (id === 'filter') { filter = e.target.value; render(); }
-  if (id === 'field-kind') changeForm({ kind: e.target.value });
+  // Switching priority keeps what was entered; another kind of change starts a fresh form.
+  if (id === 'field-kind') { const v = values(); delete v.name; changeForm(['urgent', 'queued'].includes(v.kind) ? v : { kind: v.kind }); }
   // Type, project or system changes recompute the suggested estimate.
   if (id === 'field-type') { const v = values(); delete v.name; changeForm(v); }
   if (id === 'field-p') { const v = values(); delete v.s; changeForm(v); }
@@ -401,6 +404,11 @@ document.addEventListener('change', e => {
   }
   if (id === 'pmCal') { pmCal = e.target.value; render(); }
   if (id === 'pmProject') { pmProject = Number(e.target.value); announce(''); render(); }
+});
+// A click anywhere on a table row opens the item named in it (not while selecting text).
+document.addEventListener('click', e => {
+  if (e.target.closest('button,a,input,select,label') || String(getSelection())) return;
+  e.target.closest('.data tbody tr')?.querySelector('button.link,button.project')?.click();
 });
 document.addEventListener('submit', e => {
   if (e.target.id !== 'changeForm') return;
@@ -456,12 +464,14 @@ function pmView() {
   const blockers = state.tasks.filter(t => t.p === pmProject && t.wait?.shared).map(t => '<p class="wait-note">' + esc(t.wait.reason) + '</p>').join('');
   const dates = fixed.length ? fixed.map(({ f, t }) => '<div class="detail">' + esc(t.name) + ' · <b>' + fmt(f.start) + '</b>' + (!Number.isFinite(plan.get(t.id).end) ? ' · At risk' : '') + '</div>').join('') : '<p class="sub">No fixed starts recorded.</p>';
   const risk = !Number.isFinite(forecast) ? 'Awaiting input' : forecast > p.due ? 'Forecast runs late' : 'On track';
+  const tone = !Number.isFinite(forecast) ? ' tone-waiting' : forecast > p.due ? ' tone-late' : '';
   const tasks = state.tasks.filter(t => t.p === pmProject);
   const logged = logsInPeriod().filter(e => e.p === pmProject);
   const header = pmHeader();
-  const outlook = '<section class="focus-card"><div class="focus-label">' + risk + '</div><div class="focus-content"><small>' + esc(p.name) + ' milestone</small><h2>' + fmt(forecast) + '</h2><p>Requested by ' + dueText(p) + (Number.isFinite(forecast) && forecast > p.due ? ' · ' + daysLate(forecast, p.due) + ' workdays beyond target' : '') + '</p></div></section>';
+  const outlook = '<section class="focus-card' + tone + '"><div class="focus-label">' + risk + '</div><div class="focus-content"><small>' + esc(p.name) + ' milestone</small><h2>' + fmt(forecast) + '</h2><p>Requested by ' + dueText(p) + (Number.isFinite(forecast) && forecast > p.due ? ' · ' + daysLate(forecast, p.due) + ' workdays beyond target' : '') + '</p></div></section>';
   const effort = '<section class="panel summary-card"><div class="section-head"><h2>Project time</h2><small>' + periodLabel() + '</small></div><div class="time-large">' + hours(sumTime(logged)) + '</div><div class="sub">Recorded on ' + esc(p.name) + '</div><button class="link" data-page="report">Open project report →</button></section>';
-  return header + '<div class="dash-pair">' + outlook + effort + '</div><section class="panel"><div class="section-head"><h2>Delivery details</h2><span class="sub">' + tasks.filter(t => t.actual != null).length + ' of ' + tasks.length + ' tasks completed</span></div><div class="content"><h3>Fixed starts</h3>' + dates + (blockers ? '<h3>Help needed</h3>' + blockers : '') + noteView(pmProject) + '</div></section>';
+  return header + '<div class="dash-pair">' + outlook + effort + '</div><section class="panel"><div class="section-head"><h2>Delivery details</h2><span class="sub">' + tasks.filter(t => t.actual != null).length + ' of ' + tasks.length + ' tasks completed</span></div><div class="content"><div class="effort-bar" aria-hidden="true"><span class="seg-work" style="width:' + (tasks.length ? 100 * tasks.filter(t => t.actual != null).length / tasks.length : 0) + '%"></span></div><h3>Fixed starts</h3>' + dates + (blockers ? '<h3>Help needed</h3>' + blockers : '') + noteView(pmProject) + '</div></section>' +
+    tableBox('Tasks', ['Task', 'Owner', 'Forecast', 'State'], tasks.map(t => { const x = plan.get(t.id); return ['<button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button><small class="meta-line">' + esc(systems[t.s]) + '</small>', esc(who(x.who).name), span(x.start, x.end - 1), pill(statusOf(t))]; }), 'No tasks planned for this project yet.');
 }
 $('role').onchange = () => {
   role = $('role').value; tab = role === 'pm' ? 'outlook' : 'home';
@@ -502,14 +512,18 @@ function hours(minutes) { const whole = Math.floor(minutes / 60), part = minutes
 function weekdayName(iso) { return new Date(iso + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }); }
 function logsInPeriod() { return state.logs.filter(e => inPeriod(e.date)); }
 function sumTime(entries) { return entries.reduce((n, e) => n + e.minutes, 0); }
-function tableBox(title, headers, rows, empty) {
-  return '<section class="panel"><div class="section-head"><h2>' + title + '</h2></div>' + (rows.length ? '<div class="scroll"><table class="data"><thead><tr>' + headers.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>' + rows.map(r => '<tr>' + r.map(v => '<td>' + v + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>' : '<p class="empty">' + empty + '</p>') + '</section>';
+function tableBox(title, headers, rows, empty, id = '') {
+  return '<section class="panel"' + (id ? ' id="' + id + '"' : '') + '><div class="section-head"><h2>' + title + '</h2></div>' + (rows.length ? '<div class="scroll"><table class="data"><thead><tr>' + headers.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>' + rows.map(r => '<tr>' + r.map(v => '<td>' + v + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>' : '<p class="empty">' + empty + '</p>') + '</section>';
 }
-function metrics(items) { return '<div class="metrics">' + items.map(([label, value]) => '<div><small>' + label + '</small><strong>' + value + '</strong></div>').join('') + '</div>'; }
+/** Headline numbers: [label, value, tone ('bad' | 'warn' | ''), id of the section it jumps to]. */
+function metrics(items) { return '<div class="metrics">' + items.map(([label, value, tone = '', jump]) => (jump ? '<button data-jump="' + jump + '"' : '<div') + ' class="' + tone + '"><small>' + label + '</small><strong>' + value + '</strong>' + (jump ? '</button>' : '</div>')).join('') + '</div>'; }
+/** Hours with a bar showing their share of the largest value in the table. */
+function hoursBar(minutes, max, p) { return '<span class="hbar" style="--w:' + (max ? Math.round(100 * minutes / max) : 0) + '%;' + (p == null ? '' : color(p)) + '"><span>' + hours(minutes) + '</span><i></i></span>'; }
 function projectTotals(entries) {
   const sums = new Map();
   for (const e of entries) sums.set(e.p, (sums.get(e.p) || 0) + e.minutes);
-  return [...sums].sort((a, b) => b[1] - a[1]).map(([p, n]) => [p == null ? 'Internal work' : esc(projects[p]?.name ?? 'Archived project'), hours(n)]);
+  const max = Math.max(0, ...sums.values());
+  return [...sums].sort((a, b) => b[1] - a[1]).map(([p, n]) => [p == null ? 'Internal work' : esc(projects[p]?.name ?? 'Archived project'), hoursBar(n, max, p)]);
 }
 function memberHome() {
   const mine = state.tasks.filter(t => plan.get(t.id).who === member).sort((a, b) => a.rank - b.rank);
@@ -521,8 +535,8 @@ function memberHome() {
     const x = plan.get(focus.id);
     focusCard = '<div class="focus-content"><small>' + esc(projects[focus.p].name) + ' / ' + esc(systems[focus.s]) + '</small><h2>' + esc(focus.name) + '</h2><p>' + (focus.wait ? esc(focus.wait.reason) : span(x.start, x.end - 1) + ' · ' + hrs(effectiveWork(focus)) + ' expected work · ' + hrs(duration(focus) - effectiveWork(focus)) + ' buffer') + '</p><button data-task="' + focus.id + '">Open task →</button></div>';
   }
-  const rows = open.filter(t => t !== focus).map(t => [esc(projects[t.p].name), '<button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button><small class="meta-line">' + esc(systems[t.s]) + '</small>', span(plan.get(t.id).start, plan.get(t.id).end - 1), statusOf(t)]);
-  return '<div class="dash-pair"><section class="focus-card"><div class="focus-label">' + (focus?.started ? 'In progress' : focus?.wait ? 'Waiting' : 'Next assignment') + '</div>' + focusCard + '</section><section class="panel summary-card"><div class="section-head"><h2>My timesheet</h2><small>' + periodLabel() + '</small></div><div class="time-large">' + hours(sumTime(entries)) + '</div><div class="sub">Recorded this week</div><button class="link" data-page="sheet">Open timesheet →</button></section></div>' + tableBox('My other assignments', ['Project', 'Task and system', 'Forecast', 'State'], rows, 'Your queue is clear.');
+  const rows = open.filter(t => t !== focus).map(t => [esc(projects[t.p].name), '<button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button><small class="meta-line">' + esc(systems[t.s]) + '</small>', span(plan.get(t.id).start, plan.get(t.id).end - 1), pill(statusOf(t))]);
+  return '<div class="dash-pair"><section class="focus-card' + (focus?.wait ? ' tone-waiting' : '') + '"><div class="focus-label">' + (focus?.started ? 'In progress' : focus?.wait ? 'Waiting' : 'Next assignment') + '</div>' + focusCard + '</section><section class="panel summary-card"><div class="section-head"><h2>My timesheet</h2><small>' + periodLabel() + '</small></div><div class="time-large">' + hours(sumTime(entries)) + '</div><div class="sub">Recorded in this period</div><button class="link" data-page="sheet">Open timesheet →</button></section></div>' + tableBox('My other assignments', ['Project', 'Task and system', 'Forecast', 'State'], rows, 'Your queue is clear.');
 }
 /** One entry per slot from `start`: 'work:<project>', 'buffer:<project>', protected, away, off or free. */
 function loadSlots(start, count, person) {
@@ -558,8 +572,8 @@ function managerHome() {
   const label = k => { const [kind, p] = k.split(':'); return p == null ? legend[kind] : (kind === 'buffer' ? 'Buffer · ' : '') + (projects[p]?.name ?? 'Project'); };
   const slotCell = k => { const [kind, p] = k.split(':'); return '<span class="load-cell ' + kind + (p != null ? ' proj" style="' + color(Number(p)) : '') + '" title="' + esc(label(k)) + '">' + esc(label(k)) + '</span>'; };
   const cell = day => day.every(k => k === day[0]) ? slotCell(day[0]) : '<span class="load-split">' + day.map(slotCell).join('') + '</span>';
-  const capacity = '<section class="panel"><div class="section-head"><div><h2>Team capacity</h2><p>One cell per person per workday, split into ' + slotH + 'h slots when they differ.</p></div>' + periodPicker() + '</div><div class="scroll"><table class="data load-table"><thead><tr><th>Team member</th>' + Array.from({ length: nd }, (_, i) => '<th>' + fmt((d0 + i) * spd, { weekday: 'short', day: 'numeric' }) + '</th>').join('') + '</tr></thead><tbody>' + loads.map((slots, r) => '<tr><td>' + esc(team[r][0].name) + '</td>' + Array.from({ length: nd }, (_, d) => '<td>' + cell(slots.slice(d * spd, d * spd + spd)) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div></section>';
-  return metrics([['Open capacity', loads.flat().filter(k => k === 'free').length * slotH + 'h'], ['Tasks waiting now', waiting.length], ['Late milestone forecasts', late.length]]) + capacity + tableBox('Blockers to review', ['Project', 'Task', 'Owner', 'Waiting for'], waiting.map(t => [esc(projects[t.p].name), '<button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button>', esc(who(t.wait.who).name), esc(t.wait.reason)]), 'No waiting tasks.') + (differs.length ? tableBox('Jira assignee differs from the plan', ['Task', 'Planned for', 'Jira assignee'], differs.map(([t, x]) => ['<button class="link" data-task="' + t.id + '">' + esc((t.key ? t.key + ' ' : '') + t.name) + '</button>', esc(who(x.who).name), esc(t.assignee.name)]), '') : '') + milestones() +
+  const capacity = '<section class="panel" id="capacity"><div class="section-head"><div><h2>Team capacity</h2><p>One cell per person per workday, split into ' + slotH + 'h slots when they differ.</p></div>' + periodPicker() + '</div><div class="scroll"><table class="data load-table"><thead><tr><th>Team member</th>' + Array.from({ length: nd }, (_, i) => '<th' + (d0 + i === todayDay() ? ' class="today"' : '') + '>' + fmt((d0 + i) * spd, { weekday: 'short', day: 'numeric' }) + '</th>').join('') + '</tr></thead><tbody>' + loads.map((slots, r) => '<tr><td>' + esc(team[r][0].name) + '</td>' + Array.from({ length: nd }, (_, d) => '<td>' + cell(slots.slice(d * spd, d * spd + spd)) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div></section>';
+  return metrics([['Open capacity', loads.flat().filter(k => k === 'free').length * slotH + 'h', '', 'capacity'], ['Tasks waiting now', waiting.length, waiting.length ? 'warn' : '', 'blockers'], ['Late milestone forecasts', late.length, late.length ? 'bad' : '', 'milestones']]) + capacity + tableBox('Blockers to review', ['Project', 'Task', 'Owner', 'Waiting for'], waiting.map(t => [esc(projects[t.p].name), '<button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button>', esc(who(t.wait.who).name), esc(t.wait.reason)]), 'No waiting tasks.', 'blockers') + (differs.length ? tableBox('Jira assignee differs from the plan', ['Task', 'Planned for', 'Jira assignee'], differs.map(([t, x]) => ['<button class="link" data-task="' + t.id + '">' + esc((t.key ? t.key + ' ' : '') + t.name) + '</button>', esc(who(x.who).name), esc(t.assignee.name)]), '') : '') + milestones() +
     tableBox('Recent changes', ['When', 'Who', 'What'], (state.changes ?? []).slice(0, 8).map(c => [new Date(c.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }), esc(c.by), esc(c.what)]), 'No changes yet.');
 }
 /** Timesheet entries this role sees in the period. */
@@ -586,10 +600,12 @@ function timesheetView() {
     return [weekdayName(e.date), t ? esc(projects[t.p].name) + '<small class="meta-line">' + esc(t.name) + '</small>' : e.label ? esc(e.label) : 'Internal work', hours(e.minutes), esc(e.note || '—'), '<button data-entry="' + esc(e.id) + '">Edit</button>'];
   }), timeInJira ? 'No time logged in Jira in this period. Use Log time to add a work log.' : 'No time recorded in this period. Use Log time to add an entry.');
 }
+const periodLength = () => Math.round((Date.parse(period.to) - Date.parse(period.from)) / DAY) + 1;
 /** The period split into days (up to two weeks) or weeks (longer): [label, first ISO date, last ISO date]. */
-function periodBuckets() {
-  const days = Math.round((Date.parse(period.to) - Date.parse(period.from)) / DAY) + 1;
-  if (days <= 14) return Array.from({ length: days }, (_, i) => { const iso = isoAdd(period.from, i); return [weekdayName(iso), iso, iso]; });
+function periodBuckets(entries = []) {
+  const days = periodLength();
+  // Weekend days only get a column when time was logged on them.
+  if (days <= 14) return Array.from({ length: days }, (_, i) => isoAdd(period.from, i)).filter(iso => weekday(iso) % 6 !== 0 || entries.some(e => e.date === iso)).map(iso => [weekdayName(iso), iso, iso]);
   const out = [];
   for (let from = period.from; from <= period.to;) {
     const to = [isoAdd(from, 6 - (weekday(from) + 6) % 7), period.to].sort()[0];
@@ -598,16 +614,16 @@ function periodBuckets() {
   }
   return out;
 }
-const byDay = () => periodBuckets().length && periodBuckets()[0][1] === periodBuckets()[0][2];
+const byDay = () => periodLength() <= 14;
 /** Total time per day or week of the period. */
 function dailyRows(entries) {
-  return periodBuckets().map(([label, from, to]) => [label, hours(sumTime(entries.filter(e => e.date >= from && e.date <= to)))]);
+  return periodBuckets(entries).map(([label, from, to]) => [label, hours(sumTime(entries.filter(e => e.date >= from && e.date <= to)))]);
 }
 function reportView() {
   const pm = role === 'pm', personal = role === 'member', entries = visibleEntries();
   const bar = '<div class="report-bar">' + periodPicker() + exportButton() + (pm ? '<label>Project <select id="pmProject">' + options(me.pmProjects.filter(i => projects[i]).map(i => [i, projects[i].name]), pmProject) + '</select></label>' : '') + '</div>';
   if (pm) {
-    const bySystem = systems.map((system, i) => [system, sumTime(entries.filter(e => state.tasks.find(t => t.id === e.task)?.s === i))]).filter(([, n]) => n > 0).map(([system, n]) => [esc(system), hours(n)]);
+    const bySystem = systems.map((system, i) => [system, sumTime(entries.filter(e => state.tasks.find(t => t.id === e.task)?.s === i))]).filter(([, n]) => n > 0).map(([system, n], _, all) => [esc(system), hoursBar(n, Math.max(...all.map(x => x[1])), pmProject)]);
     const current = finish(state, plan, pmProject), p = projects[pmProject];
     if (!p) return bar + '<p class="empty">No projects are assigned to you yet.</p>';
     return bar + metrics([['Project hours', hours(sumTime(entries))], ['Current milestone forecast', fmt(current)], ['Requested milestone', dueText(p)]]) + tableBox('Time by system', ['System', 'Recorded time'], bySystem, 'No project hours recorded in this period.') + tableBox('Project time by ' + (byDay() ? 'day' : 'week'), [byDay() ? 'Date' : 'Week', 'Logged project time'], dailyRows(entries), '') + '<button data-page="outlook">Open project outlook →</button>';
@@ -615,14 +631,12 @@ function reportView() {
   const stats = metrics([['Recorded hours', hours(sumTime(entries))], ['Project work', hours(sumTime(entries.filter(e => e.p != null)))], ['Internal work', hours(sumTime(entries.filter(e => e.p == null)))]]);
   const groups = tableBox('Time by project', ['Project or category', 'Recorded time'], projectTotals(entries), 'No entries for this period.');
   if (personal) return bar + stats + groups + tableBox('Time by ' + (byDay() ? 'day' : 'week'), [byDay() ? 'Date' : 'Week', 'Recorded time'], dailyRows(entries), '');
-  return bar + stats + tableBox('Team time summary', ['Member', 'Project work', 'Internal work', 'Total'], active(people).map(([p, i]) => {
-    const mine = entries.filter(e => e.who === i);
-    return [esc(p.name), hours(sumTime(mine.filter(e => e.p != null))), hours(sumTime(mine.filter(e => e.p == null))), hours(sumTime(mine))];
-  }), '') + groups + teamOverTime(entries);
+  const perPerson = active(people).map(([p, i]) => [p, entries.filter(e => e.who === i)]), most = Math.max(0, ...perPerson.map(([, mine]) => sumTime(mine)));
+  return bar + stats + tableBox('Team time summary', ['Member', 'Project work', 'Internal work', 'Total'], perPerson.map(([p, mine]) => [esc(p.name), hours(sumTime(mine.filter(e => e.p != null))), hours(sumTime(mine.filter(e => e.p == null))), hoursBar(sumTime(mine), most)]), '') + groups + teamOverTime(entries);
 }
 /** Team report: each person's hours per day or week of the period, with totals. */
 function teamOverTime(entries) {
-  const buckets = periodBuckets(), team = active(people);
+  const buckets = periodBuckets(entries), team = active(people);
   const sum = (list, [, from, to]) => sumTime(list.filter(e => e.date >= from && e.date <= to));
   const rows = team.map(([p, i]) => { const mine = entries.filter(e => e.who === i); return [esc(p.name), ...buckets.map(b => (sum(mine, b) ? hours(sum(mine, b)) : '—')), '<b>' + hours(sumTime(mine)) + '</b>']; });
   rows.push(['<b>Team</b>', ...buckets.map(b => '<b>' + hours(sum(entries, b)) + '</b>'), '<b>' + hours(sumTime(entries)) + '</b>']);
@@ -658,12 +672,13 @@ document.addEventListener('submit', async event => {
 document.addEventListener('click', event => {
   const b = event.target.closest('button'); if (!b) return;
   if (b.dataset.page) { tab = b.dataset.page; render(); }
+  if (b.dataset.jump) document.getElementById(b.dataset.jump)?.scrollIntoView();
   if (b.hasAttribute('data-export')) exportCsv();
   if (b.dataset.push) pushToJira(b.dataset.pushTask, b.dataset.push);
   if (role !== 'member') return;
   if (b.dataset.logTask) logForm(null, b.dataset.logTask);
   if (b.dataset.entry) logForm(state.logs.find(e => e.id === b.dataset.entry));
-  if (b.dataset.removeLog) modal('Delete time entry?', '<p>This removes the recorded hours from your timesheet and the weekly reports.</p><div class="actions"><button data-dismiss>Cancel</button><button class="primary" data-delete-log="' + esc(b.dataset.removeLog) + '">Delete entry</button></div>');
+  if (b.dataset.removeLog) modal('Delete time entry?', '<p>This removes the recorded hours from your timesheet and the reports.</p><div class="actions"><button data-dismiss>Cancel</button><button class="primary" data-delete-log="' + esc(b.dataset.removeLog) + '">Delete entry</button></div>');
   if (b.dataset.deleteLog) { const old = state.logs.find(x => x.id === b.dataset.deleteLog); send({ kind: 'deleteLog', id: old?.id, issue: old?.issue, date: old?.date }, 'Time entry deleted.'); }
 });
 

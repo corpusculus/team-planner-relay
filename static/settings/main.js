@@ -6,7 +6,9 @@ import { $, esc, options, modal } from '../common/ui.js';
 let saved, s, meta, dirty = false, tab = 'start', openCards = new Set(), jiraProjects = [], search = { target: null, query: '', users: [] }, trial = { type: 0, p: 0, s: 0 };
 
 const status = (text, error = false) => { $('status').textContent = text; $('status').className = 'grow ' + (error ? 'late' : 'sub'); };
-const markDirty = () => { dirty = true; status('Unsaved changes'); };
+// Save and Discard are only live while there is something to save.
+const syncSave = () => { $('save').disabled = $('discard').disabled = !dirty; };
+const markDirty = () => { dirty = true; syncSave(); status('Unsaved changes'); };
 
 async function load() {
   try {
@@ -30,7 +32,7 @@ const group = (label, inner, hint = '', cls = '') => '<div class="field ' + cls 
 const card = (key, title, summary, head, body, archived) => openCards.has(key)
   ? '<div class="card' + (archived ? ' archived' : '') + '"><div class="card-head">' + head + '<button type="button" data-card="' + key + '">Done</button></div>' + body + '</div>'
   : '<div class="card' + (archived ? ' archived' : '') + '"><div class="card-row"><div class="card-sum"><b>' + esc(title) + '</b><span class="hint">' + esc(summary) + '</span></div><button type="button" data-card="' + key + '" aria-label="Edit ' + esc(title) + '">Edit</button></div></div>';
-const TABS = [['start', 'Start'], ['people', 'People'], ['projects', 'Projects'], ['types', 'Task types'], ['estimation', 'Estimation'], ['calendar', 'Calendar']];
+const TABS = [['start', 'Start'], ['people', 'People'], ['projects', 'Projects'], ['types', 'Task types'], ['estimation', 'Estimation'], ['calendar', 'Calendar'], ['rules', 'Planning rules']];
 const ROLE = { member: 'Team member', team: 'Team manager', pm: 'Project manager' }, WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 const many = (path, list, chosen) => '<div class="checks">' + list.map(([v, l]) => '<label><input type="checkbox" data-toggle="' + path + '" value="' + esc(v) + '" ' + (chosen.map(String).includes(String(v)) ? 'checked' : '') + '>' + esc(l) + '</label>').join('') + '</div>';
 const panel = (title, intro, body) => '<section class="panel"><div class="section-head"><div><h2>' + title + '</h2><p>' + intro + '</p></div></div><div class="content">' + body + '</div></section>';
@@ -48,6 +50,7 @@ function getPath(path) { return path.split('.').reduce((o, k) => o[k], s); }
 
 function render() {
   const g = s.general;
+  syncSave();
   $('plannerLink').hidden = !isLocal;
   const team = s.people.filter(p => !p.archived), linked = team.filter(p => p.accountId).length, connected = s.projects.filter(p => p.jiraKey && !p.archived).length;
   const step = (done, title, detail, action) => '<div class="step' + (done ? ' complete' : '') + '"><span class="step-mark" aria-hidden="true">' + (done ? '✓' : '') + '</span><div class="step-text"><b>' + title + '</b><span class="hint">' + detail + '</span></div>' + action + '</div>';
@@ -57,7 +60,7 @@ function render() {
     step(team.length && (s.demo || linked === team.length), 'Add your team', team.length + ' people' + (s.demo ? '' : ', ' + linked + ' linked to Jira') + '. Roles, skills and working days.', go('people', 'People')) +
     step(s.demo ? s.projects.length : connected, 'Connect projects', (s.demo ? s.projects.length + ' demo projects' : connected + ' Jira projects connected') + '. Lead, backup and project managers.', go('projects', 'Projects')) +
     step(s.types.some(t => !t.archived && (t.issueTypes || t.components || t.labels)), 'Check task types', 'How Jira issues become tasks' + (s.demo ? '.' : ' · ' + (meta.unmappedTotal ?? 0) + ' issues need mapping.'), go('types', 'Task types')) +
-    step(!s.demo && !!meta.refreshedAt, 'Refresh from Jira', meta.refreshedAt ? 'Last refreshed ' + new Date(meta.refreshedAt).toLocaleString('en-GB') + '. Then every 5 minutes automatically.' : 'Reads the connected projects into the plan.', s.demo ? '' : '<button class="primary" id="refreshNow">↻ Refresh now</button>'));
+    step(!s.demo && !!meta.refreshedAt, 'Refresh from Jira', meta.refreshedAt ? 'Last refreshed ' + new Date(meta.refreshedAt).toLocaleString('en-GB') + '. Then every 5 minutes automatically.' : s.demo ? 'Available after you switch to live Jira data.' : 'Reads the connected projects into the plan.', s.demo ? '' : '<button class="primary" id="refreshNow">↻ Refresh now</button>'));
 
   const general = panel('Calendar and time', 'Working hours, planning slots, public holidays and where internal time is logged. The defaults suit most teams.',
     '<div class="grid-form">' +
@@ -137,8 +140,26 @@ function render() {
   const unmapped = s.demo ? '' : panel('Needs mapping', 'Jira issues from the last refresh that Relay could not plan. Fix a task type rule, a component, or a project contact, then refresh.',
     meta.unmapped.length ? (meta.unmappedTotal > meta.unmapped.length ? '<p class="hint">Showing ' + meta.unmapped.length + ' of ' + meta.unmappedTotal + '.</p>' : '') + table(['Issue', 'Project', 'Reason'], meta.unmapped.map(u => ['<b>' + esc(u.key) + '</b> ' + esc(u.summary), esc(u.project), esc(u.reason)])) : '<p class="empty">Nothing to map.</p>');
 
-  const sections = { start: start + unmapped, people, projects, types: types + systems, estimation, calendar: general };
+  const sections = { start: start + unmapped, people, projects, types: types + systems, estimation, calendar: general, rules: rulesView() };
   $('view').innerHTML = '<nav class="section-tabs" aria-label="Settings sections">' + TABS.map(([k, l]) => '<button type="button" class="tab' + (k === tab ? ' active' : '') + '" data-tab="' + k + '" aria-current="' + (k === tab ? 'page' : 'false') + '">' + l + '</button>').join('') + '</nav>' + sections[tab];
+}
+
+/** How the team uses the planner and how forecasts are calculated, with the numbers from these settings. */
+function rulesView() {
+  const g = s.general, timeInJira = !s.demo && meta.jira;
+  const rules = [
+    ['Choose work', 'Members open My work for their current task and upcoming assignments. The team manager uses Work queue to see active, ready, and waiting work across projects. Open an assignment to start on its forecast slot.'],
+    ['Hours and slots', 'Effort is entered in hours and planned in ' + g.slotHours + '-hour slots, ' + g.workdayHours / g.slotHours + ' per ' + g.workdayHours + '-hour workday. Estimates round up to a whole slot, so a person never carries more than ' + g.workdayHours / g.slotHours + ' tasks in a day.'],
+    ['Days off', 'Public holidays and each person’s working days and hours come from Relay settings. Work is planned only in the slots someone works and pauses over days off.'],
+    ['How estimates are made', 'Each task type has a base effort and buffer. Relay first looks for at least ' + g.minSamples + ' finished tasks of the same type in the last ' + g.historyMonths + ' months: same project and system, then same system, then any. The estimate is the P' + g.estimatePercentile + ' of their actual hours and the buffer runs to P' + g.bufferPercentile + '. Without history it uses the type default × system size × complexity factors such as data transfer or VPN access. Types can instead take Jira’s original estimate or story points.'],
+    ['Work and buffer', 'Enter the estimated hands-on effort. Adjust its buffer for known uncertainty. Troubleshooting uses the reserve first. Record total hands-on hours at completion; this releases unused time and teaches the estimator.'],
+    ['Waiting for someone else', 'From an active task choose Mark waiting. Record the work already performed and what will unblock it. The remaining work stops reserving capacity. Its dependent dates show Pending. Resolve the blocker to put the remaining work back in the queue.'],
+    ['Forecasts and commitments', 'A forecast can move when work, priority, or availability changes. Set a fixed start only when a date has been agreed. Preview the effect of changes before applying them. A fixed start with an unresolved prerequisite is at risk.'],
+    ['Private time and coverage', 'The team can reserve private work and record absences under Other changes. The planner uses qualified project contacts and gives the primary contact the tie. Project managers see the forecast, shared note, and agreed starts.'],
+    ['Timesheets and reports', timeInJira ? 'Time is logged only in Jira: Log time adds a Jira work log on the issue' + (g.internalIssue ? ', and internal work goes on ' + esc(g.internalIssue) : '') + '. The timesheet and reports read those work logs back. Team managers see totals by person and project, project managers see their project, and Export CSV downloads the chosen period.' : 'Members record actual time by day and task. Internal work has its own category. Members can correct their entries. Team managers see totals by person and project. Project managers see aggregate project hours. Entry notes are personal. Export CSV downloads the chosen period.'],
+    s.demo ? ['Using the demo', 'This is fictional data. Demo view lets you try the three roles. A Jira administrator can connect real Jira projects in Relay settings.'] : ['Jira', 'Tasks come from the connected Jira projects and are read-only in Jira. Jira workflow status stays in Jira; Relay’s start, waiting and finish actions are planning events. Refresh from Jira to pick up new issues.']
+  ];
+  return '<div class="rules-grid">' + rules.map(([title, body]) => '<article class="rule"><h2>' + title + '</h2><p>' + body + '</p></article>').join('') + '</div>';
 }
 
 /** Live estimate preview so admins can see what the numbers produce before saving. */
