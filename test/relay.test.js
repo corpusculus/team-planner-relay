@@ -602,6 +602,16 @@ describe('service', () => {
   });
 });
 
+describe('Forge resolver', () => {
+  it('registers every request the pages make', async () => {
+    const { readFileSync, readdirSync } = await import('node:fs');
+    const index = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+    const pages = ['planner', 'settings', 'issue'].flatMap(d => readdirSync(new URL('../static/' + d, import.meta.url)).filter(f => f.endsWith('.js')).map(f => readFileSync(new URL('../static/' + d + '/' + f, import.meta.url), 'utf8')));
+    const names = new Set(pages.join('\n').match(/\bcall\('(\w+)'/g).map(m => m.slice(6, -1)));
+    expect([...names].filter(n => !index.includes("'" + n + "'"))).toEqual([]);
+  });
+});
+
 describe('availability', () => {
   it('skips holidays and days a part-timer does not work', () => {
     const settings = sampleSettings(), M = createModel(settings, TODAY), plan = M.schedule(sampleState(settings));
