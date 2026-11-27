@@ -4,6 +4,7 @@ import { call, isLocal, session } from '../common/backend.js';
 import { $, esc, options, modal } from '../common/ui.js';
 import { rulesHtml } from '../common/rules.js';
 import { leaveMode, LEAVE_REASONS } from '../../src/shared/model.js';
+import { workTypeOf, assignWorkType } from '../../src/shared/jira-map.js';
 import './settings.css';
 
 // The page draws its own frame: it is also opened inside the planner page (#settings) for team managers.
@@ -17,12 +18,23 @@ document.body.innerHTML = '<header class="top"><div class="bar"><span class="log
   '</main>' +
   '<dialog id="modal" aria-labelledby="dialogTitle"><div class="modalhead"><h2 id="dialogTitle"></h2><button class="close" id="close" aria-label="Close dialog">×</button></div><div id="body" class="content"></div></dialog>';
 
-let teams = [], saved, s, meta, dirty = false, tab = 'start', openCards = new Set(), jiraProjects = [], projectQuery = '', search = { target: null, query: '', users: [] }, trial = { type: 0, p: 0, s: 0 };
+let teams = [], saved, s, meta, dirty = false, tab = 'start', openCards = new Set(), jiraProjects = [], jiraFields = [], jiraWork = { list: [], failed: [] }, projectQuery = '', search = { target: null, query: '', users: [] }, trial = { type: 0, p: 0, s: 0 };
 
 const status = (text, error = false) => { $('status').textContent = text; $('status').className = 'grow ' + (error ? 'late' : 'sub'); };
 // Save and Discard are only live while there is something to save.
 const syncSave = () => { $('save').disabled = $('discard').disabled = !dirty; };
 const markDirty = () => { dirty = true; syncSave(); status('Unsaved changes'); };
+
+/** Jira projects to connect and custom fields to split by; live mode inside Jira only. */
+async function loadJira() {
+  if (s.demo || !meta.jira) return;
+  [jiraProjects, jiraFields] = await Promise.all([call('jiraProjects').then(r => r.projects), call('jiraFields').then(r => r.fields), loadWorkTypes()]);
+}
+/** Work types of the connected Jira projects, including ones connected but not saved yet. */
+async function loadWorkTypes() {
+  const r = await call('jiraWorkTypes', { keys: s.projects.filter(p => p.jiraKey && !p.archived).map(p => p.jiraKey) });
+  jiraWork = { list: r.workTypes, failed: r.failed };
+}
 
 async function load() {
   try {
@@ -30,7 +42,7 @@ async function load() {
     if (!teams.some(t => t.id === session.team)) session.team = teams[0].id;
     meta = await call('getSettings');
     saved = meta.settings; saved.general.absenceIssues ??= {}; s = structuredClone(saved); dirty = false;
-    if (!s.demo && meta.jira) jiraProjects = (await call('jiraProjects')).projects;
+    await loadJira();
     render(); status(meta.refreshedAt ? 'Jira refreshed ' + new Date(meta.refreshedAt).toLocaleString('en-GB') : '');
   } catch (e) { $('view').innerHTML = '<div class="error-panel">' + esc(e.message) + '</div>'; }
 }
@@ -54,6 +66,7 @@ const many = (path, list, chosen) => '<div class="checks">' + list.map(([v, l]) 
 const panel = (title, intro, body) => '<section class="panel"><div class="section-head"><div><h2>' + title + '</h2><p>' + intro + '</p></div></div><div class="content">' + body + '</div></section>';
 // rows are arrays of cell HTML; data-label lets phones show each row as a labelled block.
 const table = (heads, rows) => '<div class="scroll"><table class="data stack"><thead><tr>' + heads.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>' + rows.map(cells => '<tr>' + cells.map((c, k) => '<td data-label="' + esc(heads[k]) + '">' + c + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
+const fieldName = id => jiraFields.find(f => f.id === id)?.name ?? id;
 const systemsList = () => s.systems.map((n, i) => [i, n]);
 const peopleList = () => s.people.map((p, i) => [i, p.name + (p.archived ? ' (archived)' : '')]);
 
@@ -126,6 +139,12 @@ function render() {
       '</div>', t.archived)).join('') +
     '<button data-add="type">＋ Add task type</button>' + tryIt());
 
+  const typeChoices = [[-1, 'Not planned'], ...s.types.map((t, i) => [i, t.name]).filter(([i]) => !s.types[i].archived), ['new', '＋ New task type']];
+  const workTypes = s.demo ? '' : panel('Jira work types', 'The work types your connected Jira projects use, and the Relay task type each is planned as. This fills in each task type’s Jira work types. Issues of a work type that is not planned show under Needs mapping.',
+    (jiraWork.list.length ? table(['Jira work type', 'Used in', 'Planned as'], jiraWork.list.map(w => [esc(w.name), esc(w.projects.join(', ')), '<select data-worktype="' + esc(w.name) + '" aria-label="Plan ' + esc(w.name) + ' as">' + options(typeChoices, workTypeOf(s.types, w.name)) + '</select>'])) : '<p class="hint">' + (meta.jira ? 'Connect a Jira project first, then read its work types.' : 'Available when Relay runs inside Jira.') + '</p>') +
+    (jiraWork.failed.length ? '<p class="hint">Jira did not show the work types of ' + esc(jiraWork.failed.join(', ')) + '. Check the project key and your access to it.</p>' : '') +
+    (meta.jira ? '<button type="button" id="readWorkTypes">↻ Read work types from Jira</button>' : ''));
+
   const people = panel('People', s.demo ? 'The fictional demo team. Switch to live mode to add your Jira users and set who is who.' : 'Team members are Jira users. Role decides what they can see and change. Skills decide which systems they can cover.',
     (!s.demo ? '<div class="queue-tools"><span class="field-label">Add a Jira user</span>' + finder('new') + '</div>' : '<button data-add="person">＋ Add person</button>') +
     s.people.map((p, i) => card('people:' + i, p.name, [ROLE[p.access], p.skills.map(k => s.systems[k]).join(', ') || 'no skills', !s.demo && (p.accountId ? 'linked to Jira' : 'not linked to Jira'), (p.days ?? [0, 1, 2, 3, 4]).length < 5 && WEEK.filter((_, k) => (p.days ?? []).includes(k)).join(', '), (p.hoursPerDay ?? s.general.workdayHours) < s.general.workdayHours && p.hoursPerDay + 'h a day', p.access === 'pm' && (p.pmProjects ?? []).length + ' projects', p.archived && 'archived'].filter(Boolean).join(' · '),
@@ -139,16 +158,17 @@ function render() {
       (p.access === 'pm' ? group('Projects they manage', many('people.' + i + '.pmProjects', s.projects.map((x, j) => [j, x.name]), p.pmProjects), '', 'full') : '') +
       '</div>', p.archived)).join(''));
 
-  const projects = panel('Projects', 'Each Relay project maps to a Jira project, or to some of its components when several Relay projects share one Jira project. The lead and backup cover the systems in their skills. Set the size of each system and the complexity that applies.',
+  const projects = panel('Projects', 'Each Relay project maps to a Jira project, or to part of it when several Relay projects share one Jira project: split by component or by a Jira field such as a Project field. The lead and backup cover the systems in their skills. Set the size of each system and the complexity that applies.',
     (!s.demo ? '<div class="queue-tools"><span class="field-label">Connect a Jira project</span><div class="link-row"><input id="projectQuery" placeholder="Project name or key" autocomplete="off" value="' + esc(projectQuery) + '"><button type="button" id="projectFind">Find</button>' + sel('', [['', jiraProjects.length ? 'Choose…' : projectQuery ? 'No Jira projects found' : 'No Jira projects visible'], ...jiraProjects.map(j => [j.key, j.name + ' (' + j.key + ')' + (s.projects.some(p => p.jiraKey === j.key) ? ' · connected, add again to split by component' : '')])], '', 'id="jiraPick" aria-label="Jira project"') + '<button id="jiraAdd" class="primary">Connect</button></div></div>' : '<button data-add="project">＋ Add project</button>') +
     s.projects.map((p, i) => {
       const pms = s.people.map((x, j) => [x, j]).filter(([x]) => x.access === 'pm' && !x.archived);
       const covered = [...new Set([...(s.people[p.lead]?.skills ?? []), ...(s.people[p.back]?.skills ?? [])])];
       const pmNames = pms.filter(([x]) => (x.pmProjects ?? []).includes(i)).map(([x]) => x.name).join(', ');
-      return card('projects:' + i, p.name, [p.jiraKey ? p.jiraKey + (p.components ? ' · ' + p.components : '') : s.demo ? null : 'no Jira key', 'lead ' + (s.people[p.lead]?.name ?? 'none'), p.back != null && 'backup ' + s.people[p.back]?.name, pmNames && 'PM ' + pmNames, p.due && 'due ' + p.due, p.archived && 'archived'].filter(Boolean).join(' · '),
+      return card('projects:' + i, p.name, [p.jiraKey ? p.jiraKey + (p.components ? ' · ' + (p.splitField ? fieldName(p.splitField) + ': ' : '') + p.components : '') : s.demo ? null : 'no Jira key', 'lead ' + (s.people[p.lead]?.name ?? 'none'), p.back != null && 'backup ' + s.people[p.back]?.name, pmNames && 'PM ' + pmNames, p.due && 'due ' + p.due, p.archived && 'archived'].filter(Boolean).join(' · '),
         text('projects.' + i + '.name', p.name, 'aria-label="Project name"') + bool('projects.' + i + '.archived', p.archived, 'Archived'), '<div class="grid-form">' +
         field('Jira project key', text('projects.' + i + '.jiraKey', p.jiraKey, 'placeholder="e.g. PILOT"')) +
-        field('Jira components (optional)', text('projects.' + i + '.components', p.components ?? '', 'placeholder="e.g. Acme, Acme portal"'), 'When several Relay projects share this Jira project: its issues with one of these components. Leave empty for all issues, or the rest.') +
+        field('Split by', sel('projects.' + i + '.splitField', [['', 'Components'], ...jiraFields.map(f => [f.id, f.name]), ...(p.splitField && !jiraFields.some(f => f.id === p.splitField) ? [[p.splitField, p.splitField]] : [])], p.splitField ?? '', 'data-rerender'), 'When several Relay projects share this Jira project: the Jira field that tells them apart.') +
+        field((p.splitField ? fieldName(p.splitField) : 'Jira components') + ' (optional)', text('projects.' + i + '.components', p.components ?? '', 'placeholder="e.g. Acme, Acme portal"'), 'Its issues with one of these values, comma-separated. Leave empty for all issues, or the rest.') +
         field('Due date', '<input type="date" data-path="projects.' + i + '.due" value="' + esc(p.due) + '">') +
         field('Lead', sel('projects.' + i + '.lead', [['', 'None'], ...peopleList()], p.lead, 'data-num data-rerender')) +
         field('Backup', sel('projects.' + i + '.back', [['', 'None'], ...peopleList()], p.back, 'data-num data-rerender')) +
@@ -171,7 +191,7 @@ function render() {
   const unmapped = s.demo ? '' : panel('Needs mapping', 'Jira issues from the last refresh that Relay could not plan. Fix a task type rule, a component, or a project contact, then refresh.',
     meta.unmapped.length ? (meta.unmappedTotal > meta.unmapped.length ? '<p class="hint">Showing ' + meta.unmapped.length + ' of ' + meta.unmappedTotal + '.</p>' : '') + table(['Issue', 'Project', 'Reason'], meta.unmapped.map(u => ['<b>' + esc(u.key) + '</b> ' + esc(u.summary), esc(u.project), esc(u.reason)])) : '<p class="empty">Nothing to map.</p>');
 
-  const sections = { start: start + unmapped + jiraUpdates + (meta.admin ? teamPanel : ''), people, projects, types: types + systems, estimation, calendar: general, rules: rulesHtml(s, !s.demo && meta.jira) };
+  const sections = { start: start + unmapped + jiraUpdates + (meta.admin ? teamPanel : ''), people, projects, types: workTypes + types + systems, estimation, calendar: general, rules: rulesHtml(s, !s.demo && meta.jira) };
   $('view').innerHTML = '<nav class="section-tabs" aria-label="Settings sections">' + TABS.map(([k, l]) => '<button type="button" class="tab' + (k === tab ? ' active' : '') + '" data-tab="' + k + '" aria-current="' + (k === tab ? 'page' : 'false') + '">' + l + '</button>').join('') + '</nav>' + sections[tab];
 }
 
@@ -209,7 +229,7 @@ const blank = {
   system: () => 'New system',
   type: () => ({ name: 'New task type', system: 0, baseHours: 8, bufferHours: 4, source: 'relay', hoursPerPoint: 4, issueTypes: '', components: '', labels: '', archived: false }),
   person: () => ({ name: 'New person', role: '', access: 'member', skills: [], accountId: null, pmProjects: [], archived: false, days: [0, 1, 2, 3, 4], hoursPerDay: s.general.workdayHours }),
-  project: () => ({ name: 'New project', jiraKey: '', components: '', jql: '', due: '', lead: null, back: null, sizes: {}, factors: [], archived: false })
+  project: () => ({ name: 'New project', jiraKey: '', components: '', splitField: '', jql: '', due: '', lead: null, back: null, sizes: {}, factors: [], archived: false })
 };
 const listOf = { size: 'sizes', factor: 'factors', system: 'systems', type: 'types', person: 'people', project: 'projects' };
 
@@ -235,6 +255,12 @@ document.addEventListener('change', e => {
     person.pmProjects = t.checked ? [...new Set([...(person.pmProjects ?? []), proj])] : (person.pmProjects ?? []).filter(x => x !== proj);
     markDirty(); render();
   }
+  if (t.dataset.worktype !== undefined) {
+    // A new type is named after the Jira work type and opened, to choose its system and hours.
+    let to = Number(t.value);
+    if (t.value === 'new') { s.types.push({ ...blank.type(), name: t.dataset.worktype.slice(0, 60) }); to = s.types.length - 1; openCards.add('types:' + to); }
+    s.types = assignWorkType(s.types, t.dataset.worktype, to); markDirty(); render();
+  }
   if (t.dataset.defaultSize) { s.defaultSize = t.dataset.defaultSize; markDirty(); }
   if (t.tagName === 'SELECT' && t.dataset.path && t.dataset.rerender === undefined) render(); // keep estimate preview current
 });
@@ -251,7 +277,7 @@ document.addEventListener('click', async e => {
   if (b.dataset.card) { openCards.has(b.dataset.card) ? openCards.delete(b.dataset.card) : openCards.add(b.dataset.card); render(); }
   if (b.dataset.add) { const list = listOf[b.dataset.add]; s[list].push(blank[b.dataset.add]()); openCards.add(list + ':' + (s[list].length - 1)); markDirty(); render(); }
   if (b.id === 'switchMode') modal(s.demo ? 'Switch to live Jira data?' : 'Switch back to demo data?', '<p>' + (s.demo ? 'The demo team, projects and plan are removed. Your systems, task types, sizes and factors are kept. Then add your Jira users and connect Jira projects.' : 'The live plan and Relay-only records (timesheets, private time, blockers) are removed and replaced with the demo. Jira itself is not changed.') + '</p><div class="actions"><button data-dismiss>Cancel</button><button class="primary" id="confirmSwitch">Switch</button></div>');
-  if (b.id === 'confirmSwitch') { $('modal').close(); await run(() => call('saveSettings', { switchMode: true }), 'Mode switched.'); if (!s.demo && meta.jira) { jiraProjects = (await call('jiraProjects')).projects; render(); } }
+  if (b.id === 'confirmSwitch') { $('modal').close(); await run(() => call('saveSettings', { switchMode: true }), 'Mode switched.'); if (!s.demo && meta.jira) { await loadJira(); render(); } }
   if (b.id === 'refreshNow') {
     if (dirty) return status('Save settings before refreshing.', true);
     status('Reading Jira…');
@@ -298,6 +324,7 @@ document.addEventListener('click', async e => {
   }
   if (b.dataset.forgetConfirm !== undefined) { $('modal').close(); await run(() => call('forgetPerson', { index: Number(b.dataset.forgetConfirm) }), 'Personal data removed.'); }
   if (b.dataset.unlink !== undefined) { s.people[Number(b.dataset.unlink)].accountId = null; markDirty(); render(); }
+  if (b.id === 'readWorkTypes') { try { await loadWorkTypes(); render(); status('Read ' + jiraWork.list.length + ' work types from Jira.'); } catch (err) { status(err.message, true); } }
   if (b.id === 'projectFind') {
     projectQuery = $('projectQuery').value.trim();
     try { jiraProjects = (await call('jiraProjects', { query: projectQuery })).projects; render(); if (!jiraProjects.length) status('No Jira projects found for “' + projectQuery + '”.', true); } catch (err) { status(err.message, true); }

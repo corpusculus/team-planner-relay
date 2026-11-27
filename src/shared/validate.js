@@ -99,17 +99,17 @@ export function validateSettings(input, prev) {
     if (jiraKey && !/^[A-Z][A-Z0-9_]{0,19}$/.test(jiraKey)) fail(label + ': Jira key is not valid.');
     const sizesIn = p.sizes || {};
     return {
-      name: str(p.name, 60, 'Project ' + (i + 1) + ' name'), jiraKey, components: str(p.components, 200, label + ' Jira components', false), jql: str(p.jql, 1000, label + ' JQL', false),
+      name: str(p.name, 60, 'Project ' + (i + 1) + ' name'), jiraKey, components: str(p.components, 200, label + ' values to match', false), splitField: /^(customfield_\d{1,10})?$/.test(p.splitField ?? '') ? p.splitField ?? '' : fail(label + ': choose a Jira field to split by.'), jql: str(p.jql, 1000, label + ' JQL', false),
       due: isoDate(p.due, label + ' due date'), lead: idx(p.lead, people, label + ' lead', true), back: idx(p.back, people, label + ' backup', true),
       sizes: Object.fromEntries(Object.entries(sizesIn).filter(([k, v]) => systems[k] !== undefined && sizeIds.has(v))),
       factors: [...new Set(arr(p.factors || [], 30, 'Factors'))].filter(f => factorIds.has(f)),
       archived: !!p.archived
     };
   });
-  // A Jira project shared by several Relay projects: only one of them may take the rest (no components).
+  // A Jira project shared by several Relay projects: only one of them may take the rest (no values to match).
   const takesRest = projects.filter(p => p.jiraKey && !p.archived && !p.components.trim()).map(p => p.jiraKey);
   const twice = takesRest.find((k, i) => takesRest.indexOf(k) !== i);
-  if (twice) fail(twice + ' is connected to several Relay projects. Give each its Jira components; one may stay empty to take the rest.');
+  if (twice) fail(twice + ' is connected to several Relay projects. Give each the components or field values it takes; one may stay empty to take the rest.');
   const demo = !!s.demo;
   if (prev && prev.demo === demo) {
     for (const [k, label] of [['systems', 'systems'], ['types', 'task types'], ['people', 'people'], ['projects', 'projects']])

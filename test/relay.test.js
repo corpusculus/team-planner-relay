@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createModel, normalize, applyLogOp, slotCounts } from '../src/shared/model.js';
 import { estimate, percentile } from '../src/shared/estimate.js';
 import { sampleSettings, sampleState, liveSettings, GENERAL } from '../src/shared/defaults.js';
-import { mapIssues, mergeTasks, matchType, historyFromIssues, projectOf } from '../src/shared/jira-map.js';
+import { mapIssues, mergeTasks, matchType, historyFromIssues, projectOf, issueFields, workTypeOf, assignWorkType } from '../src/shared/jira-map.js';
 import { validateSettings } from '../src/shared/validate.js';
 import { createService, pickDay } from '../src/service.js';
 
@@ -95,6 +95,31 @@ describe('jira mapping', () => {
     expect(at('SUP', 'Gamma')).toBeUndefined(); // nobody takes the rest
     expect(() => validateSettings({ ...s, projects: [p('A', ''), p('B', '')] })).toThrow(/SUP is connected to several/);
     expect(validateSettings({ ...s, projects: [p('A', 'acme'), p('B', '')] }).projects.map(x => x.components)).toEqual(['acme', '']);
+  });
+
+  it('splits a shared Jira project by a field such as a Project select field', () => {
+    const s = live(), p = (name, components, splitField = 'customfield_10050') => ({ ...s.projects[0], name, jiraKey: 'OPS', components, splitField });
+    s.projects = [p('Acme', 'Acme'), p('Beacon', 'Beacon, Beacon EU'), p('By component', 'Gamma', ''), p('Rest', '')];
+    const at = f => projectOf(s, { project: { key: 'OPS' }, ...f });
+    expect([
+      at({ customfield_10050: { value: 'Acme' } }), // single select
+      at({ customfield_10050: [{ value: 'x' }, { value: 'beacon eu' }] }), // multi-select, any case
+      at({ customfield_10050: { value: 'Clients', child: { value: 'Acme' } } }), // cascading select
+      at({ customfield_10050: 'Beacon' }), // text
+      at({ components: [{ name: 'Gamma' }], customfield_10050: { value: 'Other' } }),
+      at({})
+    ]).toEqual([0, 1, 0, 1, 2, 3]);
+    expect(issueFields(s)).toContain('customfield_10050');
+    expect(() => validateSettings({ ...s, projects: [p('A', 'a', 'summary')] })).toThrow(/choose a Jira field/);
+  });
+
+  it('plans each Jira work type as one Relay task type', () => {
+    const types = [{ name: 'Fix', issueTypes: 'Bug, Incident' }, { name: 'Build', issueTypes: 'Story' }, { name: 'Old', issueTypes: 'Task', archived: true }];
+    expect(['bug', 'Story', 'Task', 'Epic'].map(n => workTypeOf(types, n))).toEqual([0, 1, -1, -1]);
+    const moved = assignWorkType(types, 'incident', 1);
+    expect(moved.map(t => t.issueTypes)).toEqual(['Bug', 'Story, incident', 'Task']);
+    expect(matchType({ issuetype: { name: 'Incident' } }, moved)).toBe(1);
+    expect(assignWorkType(moved, 'Bug', -1)[0].issueTypes).toBe(''); // not planned
   });
 
   it('matches types, systems and blockers, and reports what it cannot plan', () => {
@@ -550,6 +575,14 @@ describe('service', () => {
     expect((await svc.handle('saveSettings', ctx('max'), { settings: { ...s, people: demoted } })).error).toMatch(/Keep yourself as team manager/);
     expect((await svc.handle('saveSettings', ctx('max'), { switchMode: true })).error).toMatch(/switch between demo and live/);
     expect((await svc.handle('addTeam', ctx('max'), { name: 'X' })).error).toMatch(/administrators/);
+  });
+
+  it('reads the work types of connected Jira projects, skipping ones Jira will not show', async () => {
+    const jira = { project: async key => { if (key === 'GONE') throw new Error('404'); return { issueTypes: key === 'SUP' ? [{ name: 'Incident' }, { name: 'Task' }] : [{ name: 'Task' }] }; } };
+    const svc = createService({ store: liveStore(), jira, today: () => TODAY });
+    const r = await svc.handle('jiraWorkTypes', ctx('max'), { keys: ['SUP', 'OPS', 'GONE', 'bad key'] });
+    expect(r).toEqual({ workTypes: [{ name: 'Incident', projects: ['SUP'] }, { name: 'Task', projects: ['SUP', 'OPS'] }], failed: ['GONE'] });
+    expect((await svc.handle('jiraWorkTypes', ctx('ana'), { keys: ['SUP'] })).error).toMatch(/administrators/);
   });
 
   it('searches Jira projects by name or key for the team manager', async () => {

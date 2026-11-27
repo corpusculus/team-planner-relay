@@ -5,7 +5,7 @@
 import { createModel, normalize, emptyState, applyLogOp, leaveMode, absenceOf, absenceIssue, LEAVE_REASONS, UserError, DAY_MS } from './shared/model.js';
 import { sampleSettings, sampleState, liveSettings } from './shared/defaults.js';
 import { validateSettings } from './shared/validate.js';
-import { mapIssues, historyFromIssues, mergeTasks, issueFields, projectOf } from './shared/jira-map.js';
+import { mapIssues, historyFromIssues, mergeTasks, issueFields, projectOf, splitFields, matchValues } from './shared/jira-map.js';
 
 const MEMBER_OPS = new Set(['start', 'log', 'deleteLog', 'releasePrivate', 'releaseLeave', 'requestLeave', 'cancelRequest', 'draft']);
 const MEMBER_DRAFTS = new Set(['private', 'leave', 'pause', 'resume', 'estimate', 'finish', 'revise']);
@@ -103,7 +103,7 @@ function createTeamService({ store, jira, today }) {
     const single = [internal, ...absence.keys()].filter(Boolean).map(k => '"' + k + '"');
     if (!keys.length && !single.length) return [];
     const scope = [keys.length && 'project in (' + keys.join(',') + ')', single.length && 'key in (' + single.join(',') + ')'].filter(Boolean).join(' OR ');
-    const issues = await searchAll('(' + scope + ') AND worklogDate >= "' + range.from + '" AND worklogDate <= "' + range.to + '"', ['project', 'summary', 'components'], 500);
+    const issues = await searchAll('(' + scope + ') AND worklogDate >= "' + range.from + '" AND worklogDate <= "' + range.to + '"', ['project', 'summary', 'components', ...splitFields(settings)], 500);
     const person = new Map(settings.people.map((p, i) => [p.accountId, i]));
     const tasks = new Map(state.tasks.map(t => [t.id, t])), after = Date.parse(range.from) - DAY_MS, before = Date.parse(range.to) + 2 * DAY_MS, out = [];
     // shortcut: one request per issue with time in the range, 8 at a time; fine for one team, use /worklog/updated for large sites.
@@ -260,8 +260,12 @@ function createTeamService({ store, jira, today }) {
     if (plain.length) for (const issue of await searchAll('project in (' + plain.map(p => '"' + p.jiraKey + '"').join(',') + ') AND statusCategory != Done ORDER BY Rank ASC', fields)) open.push({ p: projectOf(settings, issue.fields), issue });
     for (const p of custom) for (const issue of await searchAll(p.jql, fields)) open.push({ p: p.i, issue });
     const seen = new Set(), unique = open.filter(({ p, issue }) => p !== undefined && !seen.has(issue.id) && seen.add(issue.id));
-    // An issue of a shared Jira project whose components match no Relay project, and no Relay project takes the rest.
-    const orphans = open.filter(x => x.p === undefined && !seen.has(x.issue.id)).map(({ issue: { key, fields: f = {} } }) => ({ key, summary: String(f.summary || '').slice(0, 120), project: f.project?.key ?? '', reason: 'No Relay project takes its components (' + ((f.components || []).map(c => c.name).join(', ') || 'none') + ').' }));
+    // An issue of a shared Jira project whose components or field values match no Relay project, and no Relay project takes the rest.
+    const orphan = ({ issue: { key, fields: f = {} } }) => {
+      const used = [...new Set(settings.projects.filter(p => p.jiraKey === f.project?.key).map(p => p.splitField || ''))], values = [...new Set(used.flatMap(id => matchValues(f, id)))];
+      return { key, summary: String(f.summary || '').slice(0, 120), project: f.project?.key ?? '', reason: 'No Relay project takes its values (' + (values.join(', ') || 'none') + ').' };
+    };
+    const orphans = open.filter(x => x.p === undefined && !seen.has(x.issue.id)).map(orphan);
     const mapped = mapIssues(unique, settings, state.completed, day), tasks = mapped.tasks, unmapped = [...orphans, ...mapped.unmapped];
     const next = mergeTasks({ ...state, unmapped: unmapped.slice(0, 200), unmappedTotal: unmapped.length, refreshedAt: new Date().toISOString() }, tasks);
     createModel(settings, day).schedule(next);
@@ -443,6 +447,27 @@ function createTeamService({ store, jira, today }) {
       await configure(ctx, await settingsOf());
       if (!jira) return { projects: [] };
       return { projects: (await jira.projects(String(query ?? '').trim().slice(0, 100))).values.map(p => ({ key: p.key, name: p.name })) };
+    },
+
+    /** Work types of these Jira projects, to plan each as a Relay task type. Projects Jira will not show are listed apart. */
+    async jiraWorkTypes(ctx, { keys } = {}) {
+      await configure(ctx, await settingsOf());
+      if (!jira) return { workTypes: [], failed: [] };
+      const wanted = [...new Set((Array.isArray(keys) ? keys : []).map(String))].filter(k => /^[A-Z][A-Z0-9_]{0,19}$/.test(k)).slice(0, 50);
+      const used = new Map(), failed = [];
+      for (const key of wanted) {
+        const project = await jira.project(key).catch(() => null);
+        if (!project) { failed.push(key); continue; }
+        for (const t of project.issueTypes ?? []) used.set(t.name, [...(used.get(t.name) ?? []), key]);
+      }
+      return { workTypes: [...used].map(([name, projects]) => ({ name, projects })).sort((a, b) => a.name.localeCompare(b.name)), failed };
+    },
+
+    /** Jira custom fields, to split a shared Jira project by one of them. */
+    async jiraFields(ctx) {
+      await configure(ctx, await settingsOf());
+      if (!jira) return { fields: [] };
+      return { fields: (await jira.fields()).filter(f => f.custom).map(f => ({ id: f.id, name: f.name })).sort((a, b) => a.name.localeCompare(b.name)) };
     },
 
     async searchUsers(ctx, { query }) {

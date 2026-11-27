@@ -4,18 +4,41 @@ import { estimate, multiplier, toSlots } from './estimate.js';
 const list = s => String(s || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
 
 export function issueFields(settings) {
-  const f = ['summary', 'project', 'issuetype', 'components', 'labels', 'assignee', 'timeoriginalestimate', 'issuelinks', 'timespent', 'resolutiondate'];
+  const f = ['summary', 'project', 'issuetype', 'components', 'labels', 'assignee', 'timeoriginalestimate', 'issuelinks', 'timespent', 'resolutiondate', ...splitFields(settings)];
   return settings.general.storyPointsField ? [...f, settings.general.storyPointsField] : f;
+}
+
+/** Custom fields that split a shared Jira project between Relay projects; they must be read with each issue. */
+export const splitFields = settings => [...new Set((settings.projects ?? []).map(p => p.splitField).filter(Boolean))];
+
+/**
+ * An issue's values in a field: components (no field id), or a custom field
+ * (select, multi-select, cascading select, text or number).
+ */
+export function matchValues(fields, id) {
+  return [].concat(fields?.[id || 'components'] ?? []).flatMap(v => (v && typeof v === 'object' ? [v.name ?? v.value, v.child?.value] : [v])).filter(v => v != null && v !== '').map(String);
 }
 
 /**
  * The Relay project an issue of a connected Jira project belongs to. Several Relay projects can share one Jira project,
- * split by Jira component: the first whose components the issue has, else the one without components (the rest).
+ * split by Jira component or by a field of their choosing: the first whose values the issue has, else the one without values (the rest).
+ * The values are kept in `components` (its name from when only components could split).
  */
 export function projectOf(settings, fields) {
-  const comps = (fields?.components || []).map(c => String(c.name).toLowerCase());
   const same = settings.projects.map((p, i) => ({ p, i })).filter(({ p }) => p.jiraKey && p.jiraKey === fields?.project?.key && !p.archived);
-  return (same.find(({ p }) => list(p.components).some(c => comps.includes(c))) ?? same.find(({ p }) => !list(p.components).length))?.i;
+  return (same.find(({ p }) => { const has = matchValues(fields, p.splitField).map(v => v.toLowerCase()); return list(p.components).some(c => has.includes(c)); }) ?? same.find(({ p }) => !list(p.components).length))?.i;
+}
+
+/** Index of the task type a Jira work type is planned as, by its work-type rule; -1 when none. */
+export const workTypeOf = (types, name) => types.findIndex(t => !t.archived && list(t.issueTypes).includes(String(name).toLowerCase()));
+
+/** Task types with Jira work type `name` planned as type `to` (-1: not planned). It leaves every other type's work-type rule. */
+export function assignWorkType(types, name, to) {
+  const lc = String(name).toLowerCase();
+  return types.map((t, i) => {
+    const rest = String(t.issueTypes || '').split(',').map(x => x.trim()).filter(x => x && x.toLowerCase() !== lc);
+    return { ...t, issueTypes: (i === to ? [...rest, name] : rest).join(', ') };
+  });
 }
 
 /** Index of the first task type whose rules all match, or -1. A type without rules only applies to tasks added in Relay. */

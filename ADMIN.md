@@ -64,8 +64,8 @@ A sandbox or test site is a good first stop.
 1. Jira settings → Apps → **Team Planner Relay settings** → *Switch to live Jira data*.
 2. **People:** add the team (search by name), set each person's role and skills.
 3. **Projects:** connect one pilot project; choose its lead, backup and project managers (people whose role is Project manager).
-   One Jira project used for several customers or products (e.g. a support project split by component)? Connect it once per Relay project and fill in each one's *Jira components*. Issues go to the project whose component they carry; one project may leave components empty to take the rest.
-4. **Task types:** check the rules that match Jira issue types or components to task types.
+   One Jira project used for several customers or products (e.g. a support project split by component)? Connect it once per Relay project. In each, choose *Split by* (Components, or a Jira field such as a custom *Project* field) and the values it takes. Issues go to the project whose value they carry, with that project's lead and backup; one project may leave the values empty to take the rest.
+4. **Task types:** the *Jira work types* table lists the work types your connected projects use; choose the Relay task type each is planned as, or create one from it. Components and labels can narrow a type further.
 5. Save, then press *Refresh from Jira now*. From then on the team manager can change the team's people, projects and rules from **Settings** in the planner, without a Jira admin; switching between demo and live data and adding teams stay with Jira admins. Issues that can't be matched are listed under *Needs mapping*.
 
 ## Support and privacy
