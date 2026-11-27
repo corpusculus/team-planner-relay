@@ -66,7 +66,7 @@ A sandbox or test site is a good first stop.
 3. **Projects:** connect one pilot project; choose its lead, backup and project managers (people whose role is Project manager).
    One Jira project used for several customers or products (e.g. a support project split by component)? Connect it once per Relay project and fill in each one's *Jira components*. Issues go to the project whose component they carry; one project may leave components empty to take the rest.
 4. **Task types:** check the rules that match Jira issue types or components to task types.
-5. Save, then press *Refresh from Jira now*. Issues that can't be matched are listed under *Needs mapping*.
+5. Save, then press *Refresh from Jira now*. From then on the team manager can change the team's people, projects and rules from **Settings** in the planner, without a Jira admin; switching between demo and live data and adding teams stay with Jira admins. Issues that can't be matched are listed under *Needs mapping*.
 
 ## Support and privacy
 

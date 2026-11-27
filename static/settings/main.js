@@ -4,6 +4,18 @@ import { call, isLocal, session } from '../common/backend.js';
 import { $, esc, options, modal } from '../common/ui.js';
 import { rulesHtml } from '../common/rules.js';
 import { leaveMode, LEAVE_REASONS } from '../../src/shared/model.js';
+import './settings.css';
+
+// The page draws its own frame: it is also opened inside the planner page (#settings) for team managers.
+const embedded = location.hash === '#settings';
+try { session.team = sessionStorage.getItem('relay.team') ?? undefined; } catch {}
+document.body.className = 'settings';
+document.body.innerHTML = '<header class="top"><div class="bar"><span class="logo" aria-hidden="true"><i></i><i></i><i></i></span><span class="brand">Team Planner Relay</span><span class="divider"></span><span class="workspace">Settings</span><select id="teamPick" aria-label="Team" hidden></select><button id="plannerLink" type="button" hidden>← Planner</button></div></header>' +
+  '<main>' +
+  '<div class="savebar"><span class="grow" id="status" role="status"></span><button id="discard" disabled>Discard changes</button><button class="primary" id="save" disabled>Save settings</button></div>' +
+  '<div id="view"><p class="empty">Loading settings…</p></div>' +
+  '</main>' +
+  '<dialog id="modal" aria-labelledby="dialogTitle"><div class="modalhead"><h2 id="dialogTitle"></h2><button class="close" id="close" aria-label="Close dialog">×</button></div><div id="body" class="content"></div></dialog>';
 
 let teams = [], saved, s, meta, dirty = false, tab = 'start', openCards = new Set(), jiraProjects = [], search = { target: null, query: '', users: [] }, trial = { type: 0, p: 0, s: 0 };
 
@@ -55,13 +67,13 @@ function getPath(path) { return path.split('.').reduce((o, k) => o[k], s); }
 function render() {
   const g = s.general;
   syncSave();
-  $('plannerLink').hidden = !isLocal;
+  $('plannerLink').hidden = !isLocal && !embedded;
   $('teamPick').hidden = teams.length < 2; $('teamPick').innerHTML = options(teams.map(t => [t.id, t.name]), session.team);
   const team = s.people.filter(p => !p.archived), linked = team.filter(p => p.accountId).length, connected = s.projects.filter(p => p.jiraKey && !p.archived).length;
   const step = (done, title, detail, action) => '<div class="step' + (done ? ' complete' : '') + '"><span class="step-mark" aria-hidden="true">' + (done ? '✓' : '') + '</span><div class="step-text"><b>' + title + '</b><span class="hint">' + detail + '</span></div>' + action + '</div>';
   const go = (k, label) => '<button type="button" data-tab="' + k + '">' + label + ' →</button>';
   const start = panel('Set up Relay', s.demo ? 'You are looking at the fictional demo team. Start with Switch to live: adding your Jira users and connecting Jira projects become available after it. Until then People and Projects only hold the demo.' : 'Everything Relay needs, in order. Estimation and Calendar have sensible defaults.',
-    step(!s.demo, 'Use live Jira data', s.demo ? 'Demo data is shown now.' : 'Relay plans issues from your Jira projects.', '<button id="switchMode"' + (s.demo ? ' class="primary"' : '') + '>' + (s.demo ? 'Switch to live…' : 'Back to demo…') + '</button>') +
+    step(!s.demo, 'Use live Jira data', s.demo ? 'Demo data is shown now.' : 'Relay plans issues from your Jira projects.', (meta.admin ? '<button id="switchMode"' + (s.demo ? ' class="primary"' : '') + '>' + (s.demo ? 'Switch to live…' : 'Back to demo…') + '</button>' : '')) +
     // Demo data never ticks a step: it read as if setup were done and only Switch to live were left.
     step(!s.demo && team.length && linked === team.length, 'Add your team', s.demo ? 'After switching to live: add your Jira users, with roles, skills and working days.' : team.length + ' people, ' + linked + ' linked to Jira. Roles, skills and working days.', go('people', 'People')) +
     step(!s.demo && connected, 'Connect projects', s.demo ? 'After switching to live: connect your Jira projects, with lead, backup and project managers.' : connected + ' Jira projects connected. Lead, backup and project managers.', go('projects', 'Projects')) +
@@ -159,7 +171,7 @@ function render() {
   const unmapped = s.demo ? '' : panel('Needs mapping', 'Jira issues from the last refresh that Relay could not plan. Fix a task type rule, a component, or a project contact, then refresh.',
     meta.unmapped.length ? (meta.unmappedTotal > meta.unmapped.length ? '<p class="hint">Showing ' + meta.unmapped.length + ' of ' + meta.unmappedTotal + '.</p>' : '') + table(['Issue', 'Project', 'Reason'], meta.unmapped.map(u => ['<b>' + esc(u.key) + '</b> ' + esc(u.summary), esc(u.project), esc(u.reason)])) : '<p class="empty">Nothing to map.</p>');
 
-  const sections = { start: start + unmapped + jiraUpdates + teamPanel, people, projects, types: types + systems, estimation, calendar: general, rules: rulesHtml(s, !s.demo && meta.jira) };
+  const sections = { start: start + unmapped + jiraUpdates + (meta.admin ? teamPanel : ''), people, projects, types: types + systems, estimation, calendar: general, rules: rulesHtml(s, !s.demo && meta.jira) };
   $('view').innerHTML = '<nav class="section-tabs" aria-label="Settings sections">' + TABS.map(([k, l]) => '<button type="button" class="tab' + (k === tab ? ' active' : '') + '" data-tab="' + k + '" aria-current="' + (k === tab ? 'page' : 'false') + '">' + l + '</button>').join('') + '</nav>' + sections[tab];
 }
 
@@ -294,7 +306,7 @@ $('teamPick').onchange = async () => {
   if (dirty) { $('teamPick').value = session.team; return status('Save or discard your changes first.', true); }
   session.team = $('teamPick').value; openCards.clear(); await load();
 };
-$('plannerLink').onclick = () => { location.href = '../planner/'; };
+$('plannerLink').onclick = () => { if (embedded) { location.hash = ''; location.reload(); } else location.href = '../planner/'; };
 window.addEventListener('beforeunload', e => { if (dirty) e.preventDefault(); });
 
 load();

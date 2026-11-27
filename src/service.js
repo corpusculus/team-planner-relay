@@ -71,6 +71,13 @@ function createTeamService({ store, jira, today }) {
     return { settings, state: normalize(plan, settings) };
   }
 
+  const settingsOf = async () => (await store.get('settings')) ?? sampleSettings();
+  /** Jira admins configure every team; a live team's team manager configures their own, so they need not ask an admin. */
+  async function configure(ctx, settings) {
+    if (!settings.demo && identify(settings, ctx.accountId)?.access === 'team') return;
+    if (!(await ctx.isAdmin())) throw new UserError('Only Jira administrators and the team manager can change Relay settings.');
+  }
+
   /** Who is calling. In demo mode the caller picks a preview role; in live mode it comes from settings. */
   function identify(settings, accountId, demo) {
     if (settings.demo) {
@@ -361,15 +368,16 @@ function createTeamService({ store, jira, today }) {
     },
 
     async getSettings(ctx) {
-      if (!(await ctx.isAdmin())) throw new UserError('Only Jira administrators can change Relay settings.');
       const { settings, state } = await load(ctx.today);
-      return { settings, completed: state.completed, unmapped: state.unmapped, unmappedTotal: state.unmappedTotal ?? state.unmapped.length, refreshedAt: state.refreshedAt ?? null, today: ctx.today, jira: !!jira };
+      await configure(ctx, settings);
+      return { settings, admin: await ctx.isAdmin(), completed: state.completed, unmapped: state.unmapped, unmappedTotal: state.unmappedTotal ?? state.unmapped.length, refreshedAt: state.refreshedAt ?? null, today: ctx.today, jira: !!jira };
     },
 
     async saveSettings(ctx, { settings: input, switchMode }) {
-      if (!(await ctx.isAdmin())) throw new UserError('Only Jira administrators can change Relay settings.');
       const { settings: prev, state } = await load(ctx.today);
+      await configure(ctx, prev);
       if (switchMode) {
+        if (!(await ctx.isAdmin())) throw new UserError('Only Jira administrators can switch between demo and live data.');
         const settings = prev.demo ? liveSettings(prev) : sampleSettings();
         // Going live starts with the admin who switched as team manager, so they can open the planner straight away.
         if (prev.demo && jira) settings.people = [{ name: (await jira.myself()).displayName, role: '', access: 'team', skills: settings.systems.map((_, i) => i), accountId: ctx.accountId, pmProjects: [], archived: false, days: [0, 1, 2, 3, 4], hoursPerDay: settings.general.workdayHours }];
@@ -382,6 +390,7 @@ function createTeamService({ store, jira, today }) {
         return api.getSettings(ctx);
       }
       const settings = validateSettings({ ...input, demo: prev.demo }, prev);
+      if (identify(settings, ctx.accountId)?.access !== 'team' && !(await ctx.isAdmin())) throw new UserError('Keep yourself as team manager, or ask a Jira administrator to make this change.');
       // Queued tasks nobody can cover any more go back to "Needs mapping"; anything else unschedulable refuses the save.
       const next = normalize(state, settings), model = createModel(settings, ctx.today);
       const orphan = t => !t.started && !t.history?.length && !model.eligible(t).length;
@@ -396,8 +405,8 @@ function createTeamService({ store, jira, today }) {
 
     /** Admin: someone left. Remove their name, Jira link, private time and absences; their work records stay anonymous. */
     async forgetPerson(ctx, { index }) {
-      if (!(await ctx.isAdmin())) throw new UserError('Only Jira administrators can change Relay settings.');
       const { settings, state } = await load(ctx.today), i = Number(index);
+      await configure(ctx, settings);
       if (!settings.people[i]) throw new UserError('Choose a person.');
       settings.people[i] = { name: 'Former member ' + (i + 1), role: '', access: 'member', skills: [], accountId: null, pmProjects: [], archived: true, days: [0, 1, 2, 3, 4], hoursPerDay: settings.general.workdayHours };
       const next = { ...state, privateTime: state.privateTime.filter(b => b.who !== i), leave: state.leave.filter(l => l.who !== i), leaveRequests: state.leaveRequests.filter(r => r.who !== i) };
@@ -431,13 +440,13 @@ function createTeamService({ store, jira, today }) {
     },
 
     async jiraProjects(ctx) {
-      if (!(await ctx.isAdmin())) throw new UserError('Only Jira administrators can change Relay settings.');
+      await configure(ctx, await settingsOf());
       if (!jira) return { projects: [] };
       return { projects: (await jira.projects()).values.map(p => ({ key: p.key, name: p.name })) };
     },
 
     async searchUsers(ctx, { query }) {
-      if (!(await ctx.isAdmin())) throw new UserError('Only Jira administrators can change Relay settings.');
+      await configure(ctx, await settingsOf());
       if (!jira) return { users: [] };
       const q = String(query || '').trim().slice(0, 100);
       if (q.length < 2) return { users: [] };
@@ -530,16 +539,18 @@ function createTeamService({ store, jira, today }) {
 
   /** Whether this account can open this team's planner: 'demo', 'member' or null. */
   async function memberOf(accountId) {
-    const settings = (await store.get('settings')) ?? sampleSettings();
+    const settings = await settingsOf();
     return settings.demo ? 'demo' : settings.people.some(p => p.accountId === accountId && !p.archived) ? 'member' : null;
   }
+  /** Whether this account is the team manager of this live team, so may change its settings. */
+  const manages = async accountId => { const s = await settingsOf(); return !s.demo && identify(s, accountId)?.access === 'team'; };
 
   /** Single entry point: expected problems become { error }, anything else is logged and hidden. */
   async function handle(name, ctx, payload) {
     if (!Object.hasOwn(api, name)) return { error: 'Unknown request.' };
     return guard(name, () => api[name]({ ...ctx, today: pickDay(payload?.today, today()) }, payload ?? {}));
   }
-  return { ...api, handle, autoRefresh, memberOf };
+  return { ...api, handle, autoRefresh, memberOf, manages };
 }
 
 async function guard(name, fn) {
@@ -564,7 +575,14 @@ export function createService({ store, jira, today = utcToday }) {
   const teamName = v => { const n = String(v ?? '').trim().slice(0, 60); if (!n) throw new UserError('Enter a team name.'); return n; };
 
   const routes = {
-    listTeams: async ctx => { await admin(ctx); return { teams: await teams() }; },
+    // Admins see every team; a team manager only the teams they manage.
+    async listTeams(ctx) {
+      const list = await teams();
+      if (await ctx.isAdmin()) return { teams: list };
+      const mine = (await Promise.all(list.map(async t => (await team(t.id).manages(ctx.accountId)) && t))).filter(Boolean);
+      if (!mine.length) throw new UserError('Only Jira administrators and team managers can change Relay settings.');
+      return { teams: mine };
+    },
     async addTeam(ctx, { name }) {
       await admin(ctx);
       const list = await teams();

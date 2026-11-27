@@ -1,0 +1,37 @@
+.settings main{padding-top:24px}
+.savebar{position:sticky;top:0;z-index:5;background:var(--wash);display:flex;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line);margin-bottom:18px}
+.savebar .grow{flex:1}
+.panel .content h3{margin:18px 0 8px}
+.data td{vertical-align:middle;padding:8px 10px}
+.checks{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;font-weight:450}
+.checks label{display:flex;gap:4px;align-items:center;white-space:nowrap}
+.archived{opacity:.5}
+.card{border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:0 0 12px;background:#fff}
+.card-head{display:flex;gap:12px;align-items:center;margin-bottom:14px}
+.card-head input{font-weight:650;flex:1}
+.card-head label{white-space:nowrap;font-size:13px;display:flex;gap:6px;align-items:center}
+.field-label{font-size:13px;font-weight:620}
+input:disabled{background:var(--wash);color:var(--muted)}
+.hint{font-size:12px;color:var(--muted);margin:4px 0 0}
+.result{font-size:15px;padding:12px;border-radius:8px;background:#edf3ed;margin-top:12px}
+.modebox{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.link-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
+.link-row input,.link-row select{flex:1 1 140px;width:auto}
+.linked{color:var(--teal);font-weight:620}
+.section-tabs{display:flex;gap:24px;overflow-x:auto;border-bottom:1px solid var(--line);margin:0 0 18px}
+.section-tabs .tab{height:42px;white-space:nowrap}
+.panel .content>button[data-add],.panel .content>.queue-tools{margin-bottom:14px}
+.field>.holiday-editor{margin-top:6px;display:grid;gap:8px}
+.holiday-editor .link-row{margin-top:0}
+.card-row{display:flex;align-items:center;gap:12px}
+.card-sum{flex:1;min-width:0;display:grid;gap:2px}
+.card-sum b,.card-sum .hint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0}
+.step{display:flex;align-items:center;gap:14px;padding:12px 0;border-bottom:1px solid var(--line)}
+.step:last-child{border-bottom:0}
+.step-mark{width:26px;height:26px;flex-shrink:0;border-radius:50%;border:2px solid #c7d1cb;display:grid;place-items:center;font-weight:700;color:#fff}
+.step.complete .step-mark{background:var(--teal);border-color:var(--teal)}
+.step>button{width:150px}
+.step-text{flex:1;min-width:0;display:grid;gap:2px}
+.step-text .hint{margin:0}
+@media(max-width:700px){.step{flex-wrap:wrap}.step>button{margin-left:40px}}
+.badge{font:11px var(--mono);padding:3px 7px;border-radius:5px;background:#193a36;color:#c2e9bb}

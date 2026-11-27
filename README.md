@@ -22,7 +22,7 @@ It is eligible for Atlassian's *Runs on Atlassian* program: no data leaves Atlas
 - **Install on a site you administer:** `forge install -e production --product jira --site <site>.atlassian.net`
 - **Install on someone else's site:** developer console → [Distribution](https://developer.atlassian.com/console/myapps/d480a29e-d346-449b-b4d8-8019c22c5279/manage/distribution) → enable sharing → copy the installation link → send it to that site's admin with [ADMIN.md](ADMIN.md).
 
-In Jira: Apps → **Team Planner Relay**. Admins: Jira settings → Apps → **Team Planner Relay settings**.
+In Jira: Apps → **Team Planner Relay**. Admins: Jira settings → Apps → **Team Planner Relay settings**. Team managers of a live team: **Settings** in the planner header (their own team; switching demo/live and adding teams stay with Jira admins).
 
 ## How it fits together
 

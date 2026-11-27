@@ -163,7 +163,7 @@ function render() {
   $('memberPreview').innerHTML = options(active(people).map(([p, i]) => [i, p.name]), member);
   $('identity').hidden = me.demo; $('identity').textContent = me.demo ? '' : me.name + ' · ' + { member: 'Team member', team: 'Team manager', pm: 'Project manager' }[role];
   $('refresh').hidden = me.demo || role !== 'team';
-  $('settingsLink').hidden = !isLocal;
+  $('settingsLink').hidden = !isLocal && (me.demo || role !== 'team');
   $('reset').hidden = !(me.demo && role === 'team');
   $('footnote').textContent = me.demo ? 'Demo portfolio · Fictional data · Switch to live mode in Relay settings' : 'Live plan · ' + (state.refreshedAt ? 'Jira refreshed ' + new Date(state.refreshedAt).toLocaleString('en-GB') : 'Not refreshed from Jira yet') + (state.unmapped.length && role === 'team' ? ' · ' + state.unmapped.length + ' Jira issues need mapping (see settings)' : '');
   $('simulate').hidden = !(role === 'team' && ['home', 'queue', 'schedule', 'coverage'].includes(tab) || personal && ['home', 'sheet', 'schedule'].includes(tab));
@@ -433,7 +433,7 @@ $('simulate').onclick = () => (role === 'member' ? (tab === 'schedule' ? changeF
 $('whatIf').onclick = () => { scenario = replay([]); render(); announce('What-if started. Nothing is saved until you apply it.'); };
 $('otherChanges').onclick = () => changeForm({ kind: 'leave', ...(role === 'member' ? { who: member } : {}) });
 $('reset').onclick = () => modal('Reset sample plan?', '<p>This restores the original assignments and time off and removes the changes you applied to the demo.</p><div class="actions"><button data-dismiss>Cancel</button><button id="confirmReset" class="primary">Reset demo</button></div>');
-$('settingsLink').onclick = () => { location.href = '../settings/'; };
+$('settingsLink').onclick = () => { location.hash = 'settings'; location.reload(); };
 $('refresh').onclick = async () => {
   $('refresh').disabled = true; announce('Reading Jira…');
   try { useWorkspace(await call('refresh', { range: periodRange() })); render(); announce('Refreshed from Jira.' + (state.unmapped.length ? ' ' + state.unmapped.length + ' issues need mapping in Relay settings.' : '')); }

@@ -165,7 +165,7 @@ describe('service', () => {
 
   it('validates settings and keeps lists append-only', async () => {
     const store = liveStore(), svc = createService({ store, jira: null, today: () => TODAY });
-    expect((await svc.handle('saveSettings', ctx('max'), { settings: {} })).error).toMatch(/administrators/);
+    expect((await svc.handle('saveSettings', ctx('ana'), { settings: {} })).error).toMatch(/administrators/);
     const s = (await store.get('settings'));
     expect((await svc.handle('saveSettings', ctx('max', true), { settings: { ...s, general: { ...s.general, slotHours: 3 } } })).error).toMatch(/multiple/);
     expect((await svc.handle('saveSettings', ctx('max', true), { settings: { ...s, people: s.people.slice(1) } })).error).toMatch(/Archive/);
@@ -321,8 +321,8 @@ describe('service', () => {
 
   it('removes the personal data of someone who left', async () => {
     const store = liveStore(), svc = createService({ store, jira: null, today: () => TODAY });
-    expect((await svc.handle('forgetPerson', ctx('max'), { index: 0 })).error).toMatch(/administrators/);
-    const res = await svc.handle('forgetPerson', ctx('max', true), { index: 0 });
+    expect((await svc.handle('forgetPerson', ctx('ana'), { index: 0 })).error).toMatch(/administrators/);
+    const res = await svc.handle('forgetPerson', ctx('max'), { index: 0 }); // the team manager handles leavers too
     expect(res.settings.people[0]).toMatchObject({ name: 'Former member 1', accountId: null, archived: true });
     expect((await store.get('plan')).privateTime).toEqual([]);
     expect(await store.get('plan-undo')).toEqual({});
@@ -533,6 +533,23 @@ describe('service', () => {
     expect(pickDay('2026-11-25', '2026-11-26')).toBe('2026-11-25');
     expect(pickDay('2026-11-20', '2026-11-26')).toBe('2026-11-26');
     expect(pickDay('nonsense', '2026-11-26')).toBe('2026-11-26');
+  });
+
+  it('lets the team manager change their own team\'s settings, but not switch modes, add teams or lock themselves out', async () => {
+    const store = liveStore(), svc = createService({ store, jira: null, today: () => TODAY });
+    await svc.handle('addTeam', ctx('max', true), { name: 'Ops' }); // a demo team: admins only
+    expect((await svc.handle('listTeams', ctx('max'), {})).teams).toEqual([{ id: 't0', name: 'Team' }]);
+    expect((await svc.handle('listTeams', ctx('ana'), {})).error).toMatch(/team managers/);
+    expect((await svc.handle('getSettings', ctx('max'), { team: 't1' })).error).toMatch(/administrators/);
+    const got = await svc.handle('getSettings', ctx('max'), {});
+    expect(got.admin).toBe(false);
+    const s = got.settings;
+    const saved = await svc.handle('saveSettings', ctx('max'), { settings: { ...s, general: { ...s.general, slotHours: 2 } } });
+    expect(saved.settings.general.slotHours).toBe(2);
+    const demoted = s.people.map(p => (p.accountId === 'max' ? { ...p, access: 'member' } : p));
+    expect((await svc.handle('saveSettings', ctx('max'), { settings: { ...s, people: demoted } })).error).toMatch(/Keep yourself as team manager/);
+    expect((await svc.handle('saveSettings', ctx('max'), { switchMode: true })).error).toMatch(/switch between demo and live/);
+    expect((await svc.handle('addTeam', ctx('max'), { name: 'X' })).error).toMatch(/administrators/);
   });
 
   it('makes the admin who switches to live the first team manager', async () => {
