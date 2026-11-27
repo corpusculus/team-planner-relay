@@ -59,6 +59,7 @@ export function validateSettings(input, prev) {
     // Time off taken is logged as work on these issues, by reason ('none' = no reason given, and the fallback).
     absenceToJira: !!gi.absenceToJira,
     absenceIssues: Object.fromEntries(['none', ...LEAVE_REASONS].map(r => [r, issueKey(gi.absenceIssues?.[r], 'Time off issue for ' + (r === 'none' ? 'no reason' : r))]).filter(([, k]) => k)),
+    ignoredWorkTypes: str(gi.ignoredWorkTypes, 500, 'Ignored work types', false), // Jira work types that hold records, not work
     storyPointsField: /^[a-zA-Z0-9_]{0,40}$/.test(gi.storyPointsField ?? '') ? (gi.storyPointsField ?? '') : fail('Story points field must look like customfield_10016.')
   };
   const systems = arr(s.systems, 50, 'Systems').map((x, i) => str(x, 40, 'System ' + (i + 1)));
@@ -78,7 +79,9 @@ export function validateSettings(input, prev) {
       baseHours: num(t.baseHours, 0.5, 2000, label + ' base hours'), bufferHours: num(t.bufferHours, 0, 2000, label + ' buffer hours'),
       source, hoursPerPoint: num(t.hoursPerPoint ?? 4, 0.25, 200, label + ' hours per point'),
       issueTypes: str(t.issueTypes, 200, label + ' issue types', false), components: str(t.components, 200, label + ' components', false),
-      labels: str(t.labels, 200, label + ' labels', false), archived: !!t.archived
+      labels: str(t.labels, 200, label + ' labels', false),
+      field: /^(customfield_\d{1,10})?$/.test(t.field ?? '') ? t.field ?? '' : fail(label + ': choose a Jira field.'), fieldValues: str(t.fieldValues, 200, label + ' field values', false),
+      archived: !!t.archived
     };
   });
   const people = arr(s.people, 100, 'People').map((p, i) => ({

@@ -4,7 +4,7 @@ import { call, isLocal, session } from '../common/backend.js';
 import { $, esc, options, modal } from '../common/ui.js';
 import { rulesHtml } from '../common/rules.js';
 import { leaveMode, LEAVE_REASONS } from '../../src/shared/model.js';
-import { workTypeOf, assignWorkType } from '../../src/shared/jira-map.js';
+import { workTypeOf, assignWorkType, ignored } from '../../src/shared/jira-map.js';
 import './settings.css';
 
 // The page draws its own frame: it is also opened inside the planner page (#settings) for team managers.
@@ -90,7 +90,7 @@ function render() {
     // Demo data never ticks a step: it read as if setup were done and only Switch to live were left.
     step(!s.demo && team.length && linked === team.length, 'Add your team', s.demo ? 'After switching to live: add your Jira users, with roles, skills and working days.' : team.length + ' people, ' + linked + ' linked to Jira. Roles, skills and working days.', go('people', 'People')) +
     step(!s.demo && connected, 'Connect projects', s.demo ? 'After switching to live: connect your Jira projects, with lead, backup and project managers.' : connected + ' Jira projects connected. Lead, backup and project managers.', go('projects', 'Projects')) +
-    step(!s.demo && s.types.some(t => !t.archived && (t.issueTypes || t.components || t.labels)), 'Check task types', 'How Jira issues become tasks' + (s.demo ? '.' : ' · ' + (meta.unmappedTotal ?? 0) + ' issues need mapping.'), go('types', 'Task types')) +
+    step(!s.demo && s.types.some(t => !t.archived && (t.issueTypes || t.components || t.labels || t.fieldValues)), 'Check task types', 'How Jira issues become tasks' + (s.demo ? '.' : ' · ' + (meta.unmappedTotal ?? 0) + ' issues need mapping.'), go('types', 'Task types')) +
     step(!s.demo && !!meta.refreshedAt, 'Refresh from Jira', meta.refreshedAt ? 'Last refreshed ' + new Date(meta.refreshedAt).toLocaleString('en-GB') + '. Then every 5 minutes automatically.' : s.demo ? 'Available after you switch to live Jira data.' : 'Reads the connected projects into the plan.', s.demo ? '' : '<button class="primary" id="refreshNow">↻ Refresh now</button>'));
 
   const general = panel('Calendar and time', 'Working hours, planning slots, public holidays and where internal time is logged. The defaults suit most teams.',
@@ -126,7 +126,7 @@ function render() {
 
   const sources = [['relay', 'Relay (history / size)'], ['jira-estimate', 'Jira estimate'], ['story-points', 'Story points']];
   const types = panel('Task types', 'Each type has a default effort and buffer, where its duration comes from, and the rules that match Jira issues to it. The first matching type wins. A type without rules is only used for tasks added in Relay.',
-    s.types.map((t, i) => card('types:' + i, t.name, [s.systems[t.system], t.baseHours + 'h + ' + t.bufferHours + 'h buffer', Object.fromEntries(sources)[t.source], [t.issueTypes, t.components, t.labels].filter(Boolean).join(' / ') || 'no Jira rules', t.archived && 'archived'].filter(Boolean).join(' · '),
+    s.types.map((t, i) => card('types:' + i, t.name, [s.systems[t.system], t.baseHours + 'h + ' + t.bufferHours + 'h buffer', Object.fromEntries(sources)[t.source], [t.issueTypes, t.components, t.labels, t.field && t.fieldValues && fieldName(t.field) + ': ' + t.fieldValues].filter(Boolean).join(' / ') || 'no Jira rules', t.archived && 'archived'].filter(Boolean).join(' · '),
       text('types.' + i + '.name', t.name, 'aria-label="Task type name"') + bool('types.' + i + '.archived', t.archived, 'Archived'), '<div class="grid-form">' +
       field('System', sel('types.' + i + '.system', systemsList(), t.system, 'data-num')) +
       field('Base hours', num('types.' + i + '.baseHours', t.baseHours, 'min="0.5" step="0.5"')) +
@@ -136,12 +136,14 @@ function render() {
       field('Jira work types', text('types.' + i + '.issueTypes', t.issueTypes, 'placeholder="Task, Story"'), 'Comma-separated, as named in Jira (formerly issue types)') +
       field('Components', text('types.' + i + '.components', t.components, 'placeholder="any"'), 'Empty = any') +
       field('Labels', text('types.' + i + '.labels', t.labels, 'placeholder="any"'), 'Empty = any') +
+      field('Jira field', sel('types.' + i + '.field', [['', 'None'], ...jiraFields.map(f => [f.id, f.name]), ...(t.field && !jiraFields.some(f => f.id === t.field) ? [[t.field, t.field]] : [])], t.field ?? '', 'data-rerender'), 'Tells apart tasks of one work type, e.g. a Task type field.') +
+      (t.field ? field(fieldName(t.field) + ' values', text('types.' + i + '.fieldValues', t.fieldValues ?? '', 'placeholder="e.g. Installation"'), 'Comma-separated. Empty = any.') : '') +
       '</div>', t.archived)).join('') +
     '<button data-add="type">＋ Add task type</button>' + tryIt());
 
-  const typeChoices = [[-1, 'Not planned'], ...s.types.map((t, i) => [i, t.name]).filter(([i]) => !s.types[i].archived), ['new', '＋ New task type']];
-  const workTypes = s.demo ? '' : panel('Jira work types', 'The work types your connected Jira projects use, and the Relay task type each is planned as. This fills in each task type’s Jira work types. Issues of a work type that is not planned show under Needs mapping.',
-    (jiraWork.list.length ? table(['Jira work type', 'Used in', 'Planned as'], jiraWork.list.map(w => [esc(w.name), esc(w.projects.join(', ')), '<select data-worktype="' + esc(w.name) + '" aria-label="Plan ' + esc(w.name) + ' as">' + options(typeChoices, workTypeOf(s.types, w.name)) + '</select>'])) : '<p class="hint">' + (meta.jira ? 'Connect a Jira project first, then read its work types.' : 'Available when Relay runs inside Jira.') + '</p>') +
+  const typeChoices = [[-1, 'Not planned (Needs mapping)'], ...s.types.map((t, i) => [i, t.name]).filter(([i]) => !s.types[i].archived), ['new', '＋ New task type'], ['ignore', 'Ignore: records, not work']];
+  const workTypes = s.demo ? '' : panel('Jira work types', 'The work types your connected Jira projects use, and the Relay task type each is planned as. This fills in each task type’s Jira work types. Issues of a work type that is not planned show under Needs mapping; ignored ones (records kept in Jira, such as installer details) are left out entirely.',
+    (jiraWork.list.length ? table(['Jira work type', 'Used in', 'Planned as'], jiraWork.list.map(w => [esc(w.name), esc(w.projects.join(', ')), '<select data-worktype="' + esc(w.name) + '" aria-label="Plan ' + esc(w.name) + ' as">' + options(typeChoices, ignored(s, w.name) ? 'ignore' : workTypeOf(s.types, w.name)) + '</select>'])) : '<p class="hint">' + (meta.jira ? 'Connect a Jira project first, then read its work types.' : 'Available when Relay runs inside Jira.') + '</p>') +
     (jiraWork.failed.length ? '<p class="hint">Jira did not show the work types of ' + esc(jiraWork.failed.join(', ')) + '. Check the project key and your access to it.</p>' : '') +
     (meta.jira ? '<button type="button" id="readWorkTypes">↻ Read work types from Jira</button>' : ''));
 
@@ -227,7 +229,7 @@ const blank = {
   size: () => ({ id: 'S' + (s.sizes.length + 1), name: 'New size', multiplier: 1 }),
   factor: () => ({ id: 'f' + crypto.randomUUID().slice(0, 8), name: 'New factor', multiplier: 1.1, label: '' }),
   system: () => 'New system',
-  type: () => ({ name: 'New task type', system: 0, baseHours: 8, bufferHours: 4, source: 'relay', hoursPerPoint: 4, issueTypes: '', components: '', labels: '', archived: false }),
+  type: () => ({ name: 'New task type', system: 0, baseHours: 8, bufferHours: 4, source: 'relay', hoursPerPoint: 4, issueTypes: '', components: '', labels: '', field: '', fieldValues: '', archived: false }),
   person: () => ({ name: 'New person', role: '', access: 'member', skills: [], accountId: null, pmProjects: [], archived: false, days: [0, 1, 2, 3, 4], hoursPerDay: s.general.workdayHours }),
   project: () => ({ name: 'New project', jiraKey: '', components: '', splitField: '', jql: '', due: '', lead: null, back: null, sizes: {}, factors: [], archived: false })
 };
@@ -257,7 +259,9 @@ document.addEventListener('change', e => {
   }
   if (t.dataset.worktype !== undefined) {
     // A new type is named after the Jira work type and opened, to choose its system and hours.
-    let to = Number(t.value);
+    const name = t.dataset.worktype, rest = (s.general.ignoredWorkTypes || '').split(',').map(x => x.trim()).filter(x => x && x.toLowerCase() !== name.toLowerCase());
+    s.general.ignoredWorkTypes = [...rest, ...(t.value === 'ignore' ? [name] : [])].join(', ');
+    let to = t.value === 'ignore' ? -1 : Number(t.value);
     if (t.value === 'new') { s.types.push({ ...blank.type(), name: t.dataset.worktype.slice(0, 60) }); to = s.types.length - 1; openCards.add('types:' + to); }
     s.types = assignWorkType(s.types, t.dataset.worktype, to); markDirty(); render();
   }

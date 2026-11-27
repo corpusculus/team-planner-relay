@@ -8,8 +8,10 @@ export function issueFields(settings) {
   return settings.general.storyPointsField ? [...f, settings.general.storyPointsField] : f;
 }
 
-/** Custom fields that split a shared Jira project between Relay projects; they must be read with each issue. */
-export const splitFields = settings => [...new Set((settings.projects ?? []).map(p => p.splitField).filter(Boolean))];
+/** Custom fields that split a shared Jira project or tell task types apart; they must be read with each issue. */
+export const splitFields = settings => [...new Set([...(settings.projects ?? []).map(p => p.splitField), ...(settings.types ?? []).map(t => t.field)].filter(Boolean))];
+/** Whether issues of this Jira work type are ignored: records kept in Jira, not work to plan. */
+export const ignored = (settings, workType) => list(settings.general.ignoredWorkTypes).includes(String(workType ?? '').toLowerCase());
 
 /**
  * An issue's values in a field: components (no field id), or a custom field
@@ -48,9 +50,10 @@ export function matchType(fields, types) {
   const comps = (fields.components || []).map(c => String(c.name).toLowerCase());
   return types.findIndex(t => {
     if (t.archived) return false;
-    const its = list(t.issueTypes), ls = list(t.labels), cs = list(t.components);
-    if (!its.length && !ls.length && !cs.length) return false;
-    return (!its.length || its.includes(it)) && (!ls.length || ls.some(l => labels.includes(l))) && (!cs.length || cs.some(c => comps.includes(c)));
+    const its = list(t.issueTypes), ls = list(t.labels), cs = list(t.components), fv = t.field ? list(t.fieldValues) : [];
+    if (!its.length && !ls.length && !cs.length && !fv.length) return false;
+    const has = fv.length ? matchValues(fields, t.field).map(v => v.toLowerCase()) : [];
+    return (!its.length || its.includes(it)) && (!ls.length || ls.some(l => labels.includes(l))) && (!cs.length || cs.some(c => comps.includes(c))) && (!fv.length || fv.some(v => has.includes(v)));
   });
 }
 
@@ -69,6 +72,7 @@ export function mapIssues(issues, settings, completed, todayIso) {
   const person = accountId => settings.people.findIndex(x => x.accountId && x.accountId === accountId && !x.archived);
   for (const { p, issue } of issues) {
     const f = issue.fields || {}, base = { key: issue.key, summary: String(f.summary || '').slice(0, 120), project: settings.projects[p].name };
+    if (ignored(settings, f.issuetype?.name)) continue;
     const type = matchType(f, settings.types);
     if (type < 0) { unmapped.push({ ...base, reason: 'No task type matches work type “' + (f.issuetype?.name || '?') + '”.' }); continue; }
     const s = systemOf(f, type, settings);

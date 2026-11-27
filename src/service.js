@@ -5,7 +5,7 @@
 import { createModel, normalize, emptyState, applyLogOp, leaveMode, absenceOf, absenceIssue, LEAVE_REASONS, UserError, DAY_MS } from './shared/model.js';
 import { sampleSettings, sampleState, liveSettings } from './shared/defaults.js';
 import { validateSettings } from './shared/validate.js';
-import { mapIssues, historyFromIssues, mergeTasks, issueFields, projectOf, splitFields, matchValues } from './shared/jira-map.js';
+import { mapIssues, historyFromIssues, mergeTasks, issueFields, projectOf, splitFields, matchValues, ignored } from './shared/jira-map.js';
 
 const MEMBER_OPS = new Set(['start', 'log', 'deleteLog', 'releasePrivate', 'releaseLeave', 'requestLeave', 'cancelRequest', 'draft']);
 const MEMBER_DRAFTS = new Set(['private', 'leave', 'pause', 'resume', 'estimate', 'finish', 'revise']);
@@ -265,7 +265,7 @@ function createTeamService({ store, jira, today }) {
       const used = [...new Set(settings.projects.filter(p => p.jiraKey === f.project?.key).map(p => p.splitField || ''))], values = [...new Set(used.flatMap(id => matchValues(f, id)))];
       return { key, summary: String(f.summary || '').slice(0, 120), project: f.project?.key ?? '', reason: 'No Relay project takes its values (' + (values.join(', ') || 'none') + ').' };
     };
-    const orphans = open.filter(x => x.p === undefined && !seen.has(x.issue.id)).map(orphan);
+    const orphans = open.filter(x => x.p === undefined && !seen.has(x.issue.id) && !ignored(settings, x.issue.fields?.issuetype?.name)).map(orphan);
     const mapped = mapIssues(unique, settings, state.completed, day), tasks = mapped.tasks, unmapped = [...orphans, ...mapped.unmapped];
     const next = mergeTasks({ ...state, unmapped: unmapped.slice(0, 200), unmappedTotal: unmapped.length, refreshedAt: new Date().toISOString() }, tasks);
     createModel(settings, day).schedule(next);

@@ -113,6 +113,24 @@ describe('jira mapping', () => {
     expect(() => validateSettings({ ...s, projects: [p('A', 'a', 'summary')] })).toThrow(/choose a Jira field/);
   });
 
+  it('tells task types apart by a Jira field, and leaves out ignored work types', () => {
+    const s = live(), f = 'customfield_10060';
+    const base = { ...s.types[1], components: '' };
+    s.types = [{ ...base, name: 'Installation', issueTypes: 'Task', field: f, fieldValues: 'Installation, Setup' }, { ...base, name: 'Other task', issueTypes: 'Task' }];
+    expect([
+      matchType({ issuetype: { name: 'Task' }, [f]: { value: 'setup' } }, s.types),
+      matchType({ issuetype: { name: 'Task' }, [f]: { value: 'Service' } }, s.types),
+      matchType({ issuetype: { name: 'Task' } }, s.types),
+      matchType({ issuetype: { name: 'Bug' }, [f]: { value: 'Installation' } }, s.types)
+    ]).toEqual([0, 1, 1, -1]);
+    expect(issueFields(s)).toContain(f);
+    s.general.ignoredWorkTypes = 'Installer';
+    const { tasks, unmapped } = mapIssues([issue('1', { issuetype: { name: 'Installer' } }), issue('2', { issuetype: { name: 'Task' }, components: [{ name: 'Integration' }], [f]: { value: 'Installation' } })], s, [], TODAY);
+    expect(tasks.map(t => [t.id, t.type])).toEqual([['jira-2', 0]]);
+    expect(unmapped).toEqual([]); // the installer record is not "Needs mapping" noise
+    expect(() => validateSettings({ ...s, types: [{ ...s.types[0], field: 'summary' }] })).toThrow(/choose a Jira field/);
+  });
+
   it('plans each Jira work type as one Relay task type', () => {
     const types = [{ name: 'Fix', issueTypes: 'Bug, Incident' }, { name: 'Build', issueTypes: 'Story' }, { name: 'Old', issueTypes: 'Task', archived: true }];
     expect(['bug', 'Story', 'Task', 'Epic'].map(n => workTypeOf(types, n))).toEqual([0, 1, -1, -1]);
