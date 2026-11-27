@@ -21,6 +21,14 @@ Links to use in the listing:
 
 **Name:** Team Planner Relay
 
+**Short description** (developer console → Distribution, shown on the install page):
+Team capacity planning for Jira: schedule issues on a shared team calendar, forecast project dates, manage time off and log time as Jira work logs.
+
+**Longer description** (if the field allows a few sentences):
+Team Planner Relay plans your Jira issues on one team calendar. It estimates work from your own history, respects holidays,
+part-time days and time off, and gives each project a realistic forecast date. Members log time as Jira work logs and can request
+time off for their manager to approve. Runs entirely on Atlassian. No outside servers.
+
 **Tagline:** Team capacity planning on top of your Jira issues — estimates, calendar and timesheets in one place.
 
 **Summary:** Plan who does what, and when, across several Jira projects and teams. Relay schedules your issues on a shared team calendar,
