@@ -5,7 +5,7 @@
 import { createModel, normalize, emptyState, applyLogOp, leaveMode, absenceOf, absenceIssue, LEAVE_REASONS, UserError, DAY_MS } from './shared/model.js';
 import { sampleSettings, sampleState, liveSettings } from './shared/defaults.js';
 import { validateSettings } from './shared/validate.js';
-import { mapIssues, historyFromIssues, mergeTasks, issueFields } from './shared/jira-map.js';
+import { mapIssues, historyFromIssues, mergeTasks, issueFields, projectOf } from './shared/jira-map.js';
 
 const MEMBER_OPS = new Set(['start', 'log', 'deleteLog', 'releasePrivate', 'releaseLeave', 'requestLeave', 'cancelRequest', 'draft']);
 const MEMBER_DRAFTS = new Set(['private', 'leave', 'pause', 'resume', 'estimate', 'finish', 'revise']);
@@ -96,9 +96,9 @@ function createTeamService({ store, jira, today }) {
     const single = [internal, ...absence.keys()].filter(Boolean).map(k => '"' + k + '"');
     if (!keys.length && !single.length) return [];
     const scope = [keys.length && 'project in (' + keys.join(',') + ')', single.length && 'key in (' + single.join(',') + ')'].filter(Boolean).join(' OR ');
-    const issues = await searchAll('(' + scope + ') AND worklogDate >= "' + range.from + '" AND worklogDate <= "' + range.to + '"', ['project', 'summary'], 500);
-    const project = new Map(settings.projects.map((p, i) => [p.jiraKey, i])), person = new Map(settings.people.map((p, i) => [p.accountId, i]));
-    const tasks = new Set(state.tasks.map(t => t.id)), after = Date.parse(range.from) - DAY_MS, before = Date.parse(range.to) + 2 * DAY_MS, out = [];
+    const issues = await searchAll('(' + scope + ') AND worklogDate >= "' + range.from + '" AND worklogDate <= "' + range.to + '"', ['project', 'summary', 'components'], 500);
+    const person = new Map(settings.people.map((p, i) => [p.accountId, i]));
+    const tasks = new Map(state.tasks.map(t => [t.id, t])), after = Date.parse(range.from) - DAY_MS, before = Date.parse(range.to) + 2 * DAY_MS, out = [];
     // shortcut: one request per issue with time in the range, 8 at a time; fine for one team, use /worklog/updated for large sites.
     for (let i = 0; i < issues.length; i += 8) await Promise.all(issues.slice(i, i + 8).map(async issue => {
       const isInternal = issue.key === internal, off = absence.has(issue.key) && !isInternal ? absence.get(issue.key) : null;
@@ -108,7 +108,7 @@ function createTeamService({ store, jira, today }) {
         out.push({
           id: String(w.id), issue: String(issue.id), who, date, minutes: Math.round(w.timeSpentSeconds / 60), note: adfText(w.comment).trim(),
           task: !isInternal && off == null && tasks.has('jira-' + issue.id) ? 'jira-' + issue.id : null,
-          p: isInternal || off != null ? null : project.get(issue.fields?.project?.key) ?? null,
+          p: isInternal || off != null ? null : tasks.get('jira-' + issue.id)?.p ?? projectOf(settings, issue.fields) ?? null,
           label: isInternal ? 'Internal work' : off != null ? 'Time off' + (off ? ' · ' + off : '') : issue.key + ' · ' + (issue.fields?.summary ?? ''),
           ...(off != null ? { absence: off } : {})
         });
@@ -247,13 +247,15 @@ function createTeamService({ store, jira, today }) {
 
   /** Read open issues of all connected projects and merge them into the plan. Saves nothing unless every page succeeded. */
   async function doRefresh(settings, state, day, active, by) {
-    const fields = issueFields(settings), byKey = new Map(active.map(p => [p.jiraKey, p.i]));
+    const fields = issueFields(settings);
     // One search for every project on the default filter; projects with their own JQL need their own search.
     const plain = active.filter(p => !p.jql), custom = active.filter(p => p.jql), open = [];
-    if (plain.length) for (const issue of await searchAll('project in (' + plain.map(p => '"' + p.jiraKey + '"').join(',') + ') AND statusCategory != Done ORDER BY Rank ASC', fields)) open.push({ p: byKey.get(issue.fields?.project?.key), issue });
+    if (plain.length) for (const issue of await searchAll('project in (' + plain.map(p => '"' + p.jiraKey + '"').join(',') + ') AND statusCategory != Done ORDER BY Rank ASC', fields)) open.push({ p: projectOf(settings, issue.fields), issue });
     for (const p of custom) for (const issue of await searchAll(p.jql, fields)) open.push({ p: p.i, issue });
     const seen = new Set(), unique = open.filter(({ p, issue }) => p !== undefined && !seen.has(issue.id) && seen.add(issue.id));
-    const { tasks, unmapped } = mapIssues(unique, settings, state.completed, day);
+    // An issue of a shared Jira project whose components match no Relay project, and no Relay project takes the rest.
+    const orphans = open.filter(x => x.p === undefined && !seen.has(x.issue.id)).map(({ issue: { key, fields: f = {} } }) => ({ key, summary: String(f.summary || '').slice(0, 120), project: f.project?.key ?? '', reason: 'No Relay project takes its components (' + ((f.components || []).map(c => c.name).join(', ') || 'none') + ').' }));
+    const mapped = mapIssues(unique, settings, state.completed, day), tasks = mapped.tasks, unmapped = [...orphans, ...mapped.unmapped];
     const next = mergeTasks({ ...state, unmapped: unmapped.slice(0, 200), unmappedTotal: unmapped.length, refreshedAt: new Date().toISOString() }, tasks);
     createModel(settings, day).schedule(next);
     logChange(next, by, 'Refreshed from Jira: ' + tasks.length + ' issues planned, ' + unmapped.length + ' need mapping');
@@ -419,10 +421,9 @@ function createTeamService({ store, jira, today }) {
       const active = await jiraProjectsFor(ctx, settings, identify(settings, ctx.accountId));
       // shortcut: the 1000 most recently resolved issues only; page in batches (async events) if a site needs more.
       const done = await searchAll('project in (' + active.map(p => '"' + p.jiraKey + '"').join(',') + ') AND statusCategory = Done AND timespent > 0 AND resolved >= -' + settings.general.historyMonths * 30 + 'd ORDER BY resolved DESC', issueFields(settings), 1000);
-      const byKey = new Map(active.map(p => [p.jiraKey, p.i]));
       const relay = state.completed.filter(c => c.source !== 'jira'), recorded = new Set(relay.map(c => c.id).filter(Boolean));
       // A task finished in Relay is already in history; its Jira time would count it twice.
-      const fromJira = historyFromIssues(done.map(issue => ({ p: byKey.get(issue.fields?.project?.key), issue })).filter(x => x.p !== undefined), settings).filter(h => !recorded.has(h.id));
+      const fromJira = historyFromIssues(done.map(issue => ({ p: projectOf(settings, issue.fields), issue })).filter(x => x.p !== undefined), settings).filter(h => !recorded.has(h.id));
       const next = { ...state, completed: [...relay, ...fromJira] };
       logChange(next, 'Admin', 'Imported ' + fromJira.length + ' finished issues as estimation history');
       await savePlan(next, settings, ctx.today, state.rev);

@@ -60,11 +60,12 @@ function render() {
   const team = s.people.filter(p => !p.archived), linked = team.filter(p => p.accountId).length, connected = s.projects.filter(p => p.jiraKey && !p.archived).length;
   const step = (done, title, detail, action) => '<div class="step' + (done ? ' complete' : '') + '"><span class="step-mark" aria-hidden="true">' + (done ? '✓' : '') + '</span><div class="step-text"><b>' + title + '</b><span class="hint">' + detail + '</span></div>' + action + '</div>';
   const go = (k, label) => '<button type="button" data-tab="' + k + '">' + label + ' →</button>';
-  const start = panel('Set up Relay', s.demo ? 'You are looking at the fictional demo team. These steps take you to planning real Jira work.' : 'Everything Relay needs, in order. Estimation and Calendar have sensible defaults.',
-    step(!s.demo, 'Use live Jira data', s.demo ? 'Demo data is shown now.' : 'Relay plans issues from your Jira projects.', '<button id="switchMode">' + (s.demo ? 'Switch to live…' : 'Back to demo…') + '</button>') +
-    step(team.length && (s.demo || linked === team.length), 'Add your team', team.length + ' people' + (s.demo ? '' : ', ' + linked + ' linked to Jira') + '. Roles, skills and working days.', go('people', 'People')) +
-    step(s.demo ? s.projects.length : connected, 'Connect projects', (s.demo ? s.projects.length + ' demo projects' : connected + ' Jira projects connected') + '. Lead, backup and project managers.', go('projects', 'Projects')) +
-    step(s.types.some(t => !t.archived && (t.issueTypes || t.components || t.labels)), 'Check task types', 'How Jira issues become tasks' + (s.demo ? '.' : ' · ' + (meta.unmappedTotal ?? 0) + ' issues need mapping.'), go('types', 'Task types')) +
+  const start = panel('Set up Relay', s.demo ? 'You are looking at the fictional demo team. Start with Switch to live: adding your Jira users and connecting Jira projects become available after it. Until then People and Projects only hold the demo.' : 'Everything Relay needs, in order. Estimation and Calendar have sensible defaults.',
+    step(!s.demo, 'Use live Jira data', s.demo ? 'Demo data is shown now.' : 'Relay plans issues from your Jira projects.', '<button id="switchMode"' + (s.demo ? ' class="primary"' : '') + '>' + (s.demo ? 'Switch to live…' : 'Back to demo…') + '</button>') +
+    // Demo data never ticks a step: it read as if setup were done and only Switch to live were left.
+    step(!s.demo && team.length && linked === team.length, 'Add your team', s.demo ? 'After switching to live: add your Jira users, with roles, skills and working days.' : team.length + ' people, ' + linked + ' linked to Jira. Roles, skills and working days.', go('people', 'People')) +
+    step(!s.demo && connected, 'Connect projects', s.demo ? 'After switching to live: connect your Jira projects, with lead, backup and project managers.' : connected + ' Jira projects connected. Lead, backup and project managers.', go('projects', 'Projects')) +
+    step(!s.demo && s.types.some(t => !t.archived && (t.issueTypes || t.components || t.labels)), 'Check task types', 'How Jira issues become tasks' + (s.demo ? '.' : ' · ' + (meta.unmappedTotal ?? 0) + ' issues need mapping.'), go('types', 'Task types')) +
     step(!s.demo && !!meta.refreshedAt, 'Refresh from Jira', meta.refreshedAt ? 'Last refreshed ' + new Date(meta.refreshedAt).toLocaleString('en-GB') + '. Then every 5 minutes automatically.' : s.demo ? 'Available after you switch to live Jira data.' : 'Reads the connected projects into the plan.', s.demo ? '' : '<button class="primary" id="refreshNow">↻ Refresh now</button>'));
 
   const general = panel('Calendar and time', 'Working hours, planning slots, public holidays and where internal time is logged. The defaults suit most teams.',
@@ -126,15 +127,16 @@ function render() {
       (p.access === 'pm' ? group('Projects they manage', many('people.' + i + '.pmProjects', s.projects.map((x, j) => [j, x.name]), p.pmProjects), '', 'full') : '') +
       '</div>', p.archived)).join(''));
 
-  const projects = panel('Projects', 'Each Relay project maps to one Jira project. The lead and backup cover the systems in their skills. Set the size of each system and the complexity that applies.',
-    (!s.demo ? '<div class="queue-tools"><label>Connect a Jira project ' + sel('', [['', jiraProjects.length ? 'Choose…' : 'No Jira projects visible'], ...jiraProjects.filter(j => !s.projects.some(p => p.jiraKey === j.key)).map(j => [j.key, j.name + ' (' + j.key + ')'])], '', 'id="jiraPick"') + '</label><button id="jiraAdd">Connect</button></div>' : '<button data-add="project">＋ Add project</button>') +
+  const projects = panel('Projects', 'Each Relay project maps to a Jira project, or to some of its components when several Relay projects share one Jira project. The lead and backup cover the systems in their skills. Set the size of each system and the complexity that applies.',
+    (!s.demo ? '<div class="queue-tools"><label>Connect a Jira project ' + sel('', [['', jiraProjects.length ? 'Choose…' : 'No Jira projects visible'], ...jiraProjects.map(j => [j.key, j.name + ' (' + j.key + ')' + (s.projects.some(p => p.jiraKey === j.key) ? ' · connected, add again to split by component' : '')])], '', 'id="jiraPick"') + '</label><button id="jiraAdd">Connect</button></div>' : '<button data-add="project">＋ Add project</button>') +
     s.projects.map((p, i) => {
       const pms = s.people.map((x, j) => [x, j]).filter(([x]) => x.access === 'pm' && !x.archived);
       const covered = [...new Set([...(s.people[p.lead]?.skills ?? []), ...(s.people[p.back]?.skills ?? [])])];
       const pmNames = pms.filter(([x]) => (x.pmProjects ?? []).includes(i)).map(([x]) => x.name).join(', ');
-      return card('projects:' + i, p.name, [p.jiraKey || (s.demo ? null : 'no Jira key'), 'lead ' + (s.people[p.lead]?.name ?? 'none'), p.back != null && 'backup ' + s.people[p.back]?.name, pmNames && 'PM ' + pmNames, p.due && 'due ' + p.due, p.archived && 'archived'].filter(Boolean).join(' · '),
+      return card('projects:' + i, p.name, [p.jiraKey ? p.jiraKey + (p.components ? ' · ' + p.components : '') : s.demo ? null : 'no Jira key', 'lead ' + (s.people[p.lead]?.name ?? 'none'), p.back != null && 'backup ' + s.people[p.back]?.name, pmNames && 'PM ' + pmNames, p.due && 'due ' + p.due, p.archived && 'archived'].filter(Boolean).join(' · '),
         text('projects.' + i + '.name', p.name, 'aria-label="Project name"') + bool('projects.' + i + '.archived', p.archived, 'Archived'), '<div class="grid-form">' +
         field('Jira project key', text('projects.' + i + '.jiraKey', p.jiraKey, 'placeholder="e.g. PILOT"')) +
+        field('Jira components (optional)', text('projects.' + i + '.components', p.components ?? '', 'placeholder="e.g. Acme, Acme portal"'), 'When several Relay projects share this Jira project: its issues with one of these components. Leave empty for all issues, or the rest.') +
         field('Due date', '<input type="date" data-path="projects.' + i + '.due" value="' + esc(p.due) + '">') +
         field('Lead', sel('projects.' + i + '.lead', [['', 'None'], ...peopleList()], p.lead, 'data-num data-rerender')) +
         field('Backup', sel('projects.' + i + '.back', [['', 'None'], ...peopleList()], p.back, 'data-num data-rerender')) +
@@ -195,7 +197,7 @@ const blank = {
   system: () => 'New system',
   type: () => ({ name: 'New task type', system: 0, baseHours: 8, bufferHours: 4, source: 'relay', hoursPerPoint: 4, issueTypes: '', components: '', labels: '', archived: false }),
   person: () => ({ name: 'New person', role: '', access: 'member', skills: [], accountId: null, pmProjects: [], archived: false, days: [0, 1, 2, 3, 4], hoursPerDay: s.general.workdayHours }),
-  project: () => ({ name: 'New project', jiraKey: '', jql: '', due: '', lead: null, back: null, sizes: {}, factors: [], archived: false })
+  project: () => ({ name: 'New project', jiraKey: '', components: '', jql: '', due: '', lead: null, back: null, sizes: {}, factors: [], archived: false })
 };
 const listOf = { size: 'sizes', factor: 'factors', system: 'systems', type: 'types', person: 'people', project: 'projects' };
 

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createModel, normalize, applyLogOp, slotCounts } from '../src/shared/model.js';
 import { estimate, percentile } from '../src/shared/estimate.js';
 import { sampleSettings, sampleState, liveSettings, GENERAL } from '../src/shared/defaults.js';
-import { mapIssues, mergeTasks, matchType, historyFromIssues } from '../src/shared/jira-map.js';
+import { mapIssues, mergeTasks, matchType, historyFromIssues, projectOf } from '../src/shared/jira-map.js';
 import { validateSettings } from '../src/shared/validate.js';
 import { createService, pickDay } from '../src/service.js';
 
@@ -85,6 +85,17 @@ describe('jira mapping', () => {
     return s;
   };
   const issue = (id, fields) => ({ p: 0, issue: { id, key: 'PIL-' + id, fields: { summary: 'Issue ' + id, issuetype: { name: 'Task' }, labels: [], components: [], ...fields } } });
+
+  it('splits a shared Jira project into Relay projects by component', () => {
+    const s = live(), p = (name, components) => ({ ...s.projects[0], name, jiraKey: 'SUP', components });
+    s.projects = [p('Acme', 'Acme, Acme portal'), p('Beacon', 'beacon'), p('Other support', ''), { ...p('Old', 'Old'), archived: true }, { ...s.projects[0] }];
+    const at = (key, ...names) => projectOf(s, { project: { key }, components: names.map(name => ({ name })) });
+    expect([at('SUP', 'Acme portal'), at('SUP', 'Beacon'), at('SUP', 'Old'), at('SUP'), at('PIL', 'Acme'), at('XYZ')]).toEqual([0, 1, 2, 2, 4, undefined]);
+    s.projects.splice(2, 1);
+    expect(at('SUP', 'Gamma')).toBeUndefined(); // nobody takes the rest
+    expect(() => validateSettings({ ...s, projects: [p('A', ''), p('B', '')] })).toThrow(/SUP is connected to several/);
+    expect(validateSettings({ ...s, projects: [p('A', 'acme'), p('B', '')] }).projects.map(x => x.components)).toEqual(['acme', '']);
+  });
 
   it('matches types, systems and blockers, and reports what it cannot plan', () => {
     const s = live();
@@ -283,6 +294,19 @@ describe('service', () => {
     const later = Date.parse((await store.get('plan')).refreshedAt) + 61 * 60000;
     changed = false;
     expect(await svc.autoRefresh(later)).toEqual({ refreshed: true }); // hourly full refresh even without changes
+  });
+
+  it('plans each issue of a shared Jira project under its component\'s Relay project', async () => {
+    const store = liveStore(), s = await store.get('settings');
+    Object.assign(s.projects[0], { jiraKey: 'SUP', components: 'Acme' });
+    Object.assign(s.projects[1], { jiraKey: 'SUP', components: 'Beacon' });
+    await store.set('settings', s);
+    const issue = (id, comp) => ({ id, key: 'SUP-' + id, fields: { project: { key: 'SUP' }, summary: 'S' + id, issuetype: { name: 'Task' }, components: [{ name: 'Integration' }, ...(comp ? [{ name: comp }] : [])] } });
+    const jira = { search: async () => ({ issues: [issue('1', 'Acme'), issue('2', 'Beacon'), issue('3', 'Gamma')], isLast: true }), worklogs: async () => [] };
+    expect((await createService({ store, jira, today: () => TODAY }).handle('refresh', ctx('max'), {})).error).toBeUndefined();
+    const plan = await store.get('plan');
+    expect(['jira-1', 'jira-2'].map(id => plan.tasks.find(t => t.id === id).p)).toEqual([0, 1]);
+    expect(plan.unmapped).toEqual([expect.objectContaining({ key: 'SUP-3', reason: expect.stringMatching(/Integration, Gamma/) })]);
   });
 
   it('refreshes from Jira in live mode only', async () => {

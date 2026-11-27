@@ -8,6 +8,16 @@ export function issueFields(settings) {
   return settings.general.storyPointsField ? [...f, settings.general.storyPointsField] : f;
 }
 
+/**
+ * The Relay project an issue of a connected Jira project belongs to. Several Relay projects can share one Jira project,
+ * split by Jira component: the first whose components the issue has, else the one without components (the rest).
+ */
+export function projectOf(settings, fields) {
+  const comps = (fields?.components || []).map(c => String(c.name).toLowerCase());
+  const same = settings.projects.map((p, i) => ({ p, i })).filter(({ p }) => p.jiraKey && p.jiraKey === fields?.project?.key && !p.archived);
+  return (same.find(({ p }) => list(p.components).some(c => comps.includes(c))) ?? same.find(({ p }) => !list(p.components).length))?.i;
+}
+
 /** Index of the first task type whose rules all match, or -1. A type without rules only applies to tasks added in Relay. */
 export function matchType(fields, types) {
   const it = String(fields.issuetype?.name || '').toLowerCase();
