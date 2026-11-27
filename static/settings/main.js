@@ -17,7 +17,7 @@ document.body.innerHTML = '<header class="top"><div class="bar"><span class="log
   '</main>' +
   '<dialog id="modal" aria-labelledby="dialogTitle"><div class="modalhead"><h2 id="dialogTitle"></h2><button class="close" id="close" aria-label="Close dialog">×</button></div><div id="body" class="content"></div></dialog>';
 
-let teams = [], saved, s, meta, dirty = false, tab = 'start', openCards = new Set(), jiraProjects = [], search = { target: null, query: '', users: [] }, trial = { type: 0, p: 0, s: 0 };
+let teams = [], saved, s, meta, dirty = false, tab = 'start', openCards = new Set(), jiraProjects = [], projectQuery = '', search = { target: null, query: '', users: [] }, trial = { type: 0, p: 0, s: 0 };
 
 const status = (text, error = false) => { $('status').textContent = text; $('status').className = 'grow ' + (error ? 'late' : 'sub'); };
 // Save and Discard are only live while there is something to save.
@@ -120,7 +120,7 @@ function render() {
       field('Buffer hours', num('types.' + i + '.bufferHours', t.bufferHours, 'min="0" step="0.5"')) +
       field('Duration from', sel('types.' + i + '.source', sources, t.source, 'data-rerender')) +
       field('Hours per story point', num('types.' + i + '.hoursPerPoint', t.hoursPerPoint, 'min="0.25" step="0.25"' + (t.source === 'story-points' ? '' : ' disabled')), t.source === 'story-points' ? '' : 'Only for story points') +
-      field('Jira issue types', text('types.' + i + '.issueTypes', t.issueTypes, 'placeholder="Task, Story"'), 'Comma-separated') +
+      field('Jira work types', text('types.' + i + '.issueTypes', t.issueTypes, 'placeholder="Task, Story"'), 'Comma-separated, as named in Jira (formerly issue types)') +
       field('Components', text('types.' + i + '.components', t.components, 'placeholder="any"'), 'Empty = any') +
       field('Labels', text('types.' + i + '.labels', t.labels, 'placeholder="any"'), 'Empty = any') +
       '</div>', t.archived)).join('') +
@@ -140,7 +140,7 @@ function render() {
       '</div>', p.archived)).join(''));
 
   const projects = panel('Projects', 'Each Relay project maps to a Jira project, or to some of its components when several Relay projects share one Jira project. The lead and backup cover the systems in their skills. Set the size of each system and the complexity that applies.',
-    (!s.demo ? '<div class="queue-tools"><label>Connect a Jira project ' + sel('', [['', jiraProjects.length ? 'Choose…' : 'No Jira projects visible'], ...jiraProjects.map(j => [j.key, j.name + ' (' + j.key + ')' + (s.projects.some(p => p.jiraKey === j.key) ? ' · connected, add again to split by component' : '')])], '', 'id="jiraPick"') + '</label><button id="jiraAdd">Connect</button></div>' : '<button data-add="project">＋ Add project</button>') +
+    (!s.demo ? '<div class="queue-tools"><span class="field-label">Connect a Jira project</span><div class="link-row"><input id="projectQuery" placeholder="Project name or key" autocomplete="off" value="' + esc(projectQuery) + '"><button type="button" id="projectFind">Find</button>' + sel('', [['', jiraProjects.length ? 'Choose…' : projectQuery ? 'No Jira projects found' : 'No Jira projects visible'], ...jiraProjects.map(j => [j.key, j.name + ' (' + j.key + ')' + (s.projects.some(p => p.jiraKey === j.key) ? ' · connected, add again to split by component' : '')])], '', 'id="jiraPick" aria-label="Jira project"') + '<button id="jiraAdd" class="primary">Connect</button></div></div>' : '<button data-add="project">＋ Add project</button>') +
     s.projects.map((p, i) => {
       const pms = s.people.map((x, j) => [x, j]).filter(([x]) => x.access === 'pm' && !x.archived);
       const covered = [...new Set([...(s.people[p.lead]?.skills ?? []), ...(s.people[p.back]?.skills ?? [])])];
@@ -238,6 +238,12 @@ document.addEventListener('change', e => {
   if (t.dataset.defaultSize) { s.defaultSize = t.dataset.defaultSize; markDirty(); }
   if (t.tagName === 'SELECT' && t.dataset.path && t.dataset.rerender === undefined) render(); // keep estimate preview current
 });
+// Enter in a search box runs its Find button.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || !e.target.id) return;
+  const find = e.target.id === 'projectQuery' ? $('projectFind') : e.target.id.startsWith('find-') ? document.querySelector('[data-find="' + e.target.id.slice(5) + '"]') : null;
+  if (find) { e.preventDefault(); find.click(); }
+});
 document.addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.hasAttribute('data-dismiss')) $('modal').close();
@@ -292,6 +298,10 @@ document.addEventListener('click', async e => {
   }
   if (b.dataset.forgetConfirm !== undefined) { $('modal').close(); await run(() => call('forgetPerson', { index: Number(b.dataset.forgetConfirm) }), 'Personal data removed.'); }
   if (b.dataset.unlink !== undefined) { s.people[Number(b.dataset.unlink)].accountId = null; markDirty(); render(); }
+  if (b.id === 'projectFind') {
+    projectQuery = $('projectQuery').value.trim();
+    try { jiraProjects = (await call('jiraProjects', { query: projectQuery })).projects; render(); if (!jiraProjects.length) status('No Jira projects found for “' + projectQuery + '”.', true); } catch (err) { status(err.message, true); }
+  }
   if (b.id === 'jiraAdd') {
     const j = jiraProjects.find(x => x.key === $('jiraPick').value);
     if (j) { s.projects.push({ ...blank.project(), name: j.name, jiraKey: j.key }); openCards.add('projects:' + (s.projects.length - 1)); markDirty(); render(); }

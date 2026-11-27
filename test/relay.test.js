@@ -552,6 +552,14 @@ describe('service', () => {
     expect((await svc.handle('addTeam', ctx('max'), { name: 'X' })).error).toMatch(/administrators/);
   });
 
+  it('searches Jira projects by name or key for the team manager', async () => {
+    const asked = [], jira = { projects: async q => { asked.push(q); return { values: [{ key: 'SUP', name: 'Support', id: '1' }] }; } };
+    const svc = createService({ store: liveStore(), jira, today: () => TODAY });
+    expect((await svc.handle('jiraProjects', ctx('max'), { query: '  sup ' })).projects).toEqual([{ key: 'SUP', name: 'Support' }]);
+    expect(asked).toEqual(['sup']);
+    expect((await svc.handle('jiraProjects', ctx('ana'), { query: 'sup' })).error).toMatch(/administrators/);
+  });
+
   it('makes the admin who switches to live the first team manager', async () => {
     const store = memStore(), jira = { myself: async () => ({ displayName: 'Vera Admin' }) };
     const svc = createService({ store, jira, today: () => TODAY });

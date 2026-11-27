@@ -25,8 +25,8 @@ function makeJira(as) {
   const send = (method, body) => ({ method, body: JSON.stringify(body) });
   return {
     search: body => request(route`/rest/api/3/search/jql`, send('POST', body)),
-    // shortcut: first 100 projects only; page through /project/search if a site has more.
-    projects: () => request(route`/rest/api/3/project/search?maxResults=100&orderBy=name`),
+    // Jira matches the query against project names and keys; the first 50 matches are enough to pick from.
+    projects: (query = '') => request(route`/rest/api/3/project/search?maxResults=50&orderBy=name&query=${query}`),
     users: query => request(route`/rest/api/3/user/search?query=${query}&maxResults=20`),
     myself: () => request(route`/rest/api/3/myself`),
     isAdmin: async () => (await request(route`/rest/api/3/mypermissions?permissions=ADMINISTER`)).permissions?.ADMINISTER?.havePermission === true,

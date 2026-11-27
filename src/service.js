@@ -439,10 +439,10 @@ function createTeamService({ store, jira, today }) {
       return { imported: fromJira.length };
     },
 
-    async jiraProjects(ctx) {
+    async jiraProjects(ctx, { query } = {}) {
       await configure(ctx, await settingsOf());
       if (!jira) return { projects: [] };
-      return { projects: (await jira.projects()).values.map(p => ({ key: p.key, name: p.name })) };
+      return { projects: (await jira.projects(String(query ?? '').trim().slice(0, 100))).values.map(p => ({ key: p.key, name: p.name })) };
     },
 
     async searchUsers(ctx, { query }) {

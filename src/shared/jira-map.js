@@ -47,7 +47,7 @@ export function mapIssues(issues, settings, completed, todayIso) {
   for (const { p, issue } of issues) {
     const f = issue.fields || {}, base = { key: issue.key, summary: String(f.summary || '').slice(0, 120), project: settings.projects[p].name };
     const type = matchType(f, settings.types);
-    if (type < 0) { unmapped.push({ ...base, reason: 'No task type matches issue type “' + (f.issuetype?.name || '?') + '”.' }); continue; }
+    if (type < 0) { unmapped.push({ ...base, reason: 'No task type matches work type “' + (f.issuetype?.name || '?') + '”.' }); continue; }
     const s = systemOf(f, type, settings);
     if (!covers(settings, p, s)) { unmapped.push({ ...base, reason: 'Nobody on ' + base.project + ' covers ' + settings.systems[s] + '.' }); continue; }
     const est = estimate(settings, { type, p, s, labels: f.labels, originalEstimateSec: f.timeoriginalestimate, storyPoints: Number(f[g.storyPointsField]) || 0 }, completed, todayIso);
