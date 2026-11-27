@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { createModel, normalize } from '../src/shared/model.js';
+import { createModel, normalize, applyLogOp } from '../src/shared/model.js';
 import { estimate, percentile } from '../src/shared/estimate.js';
-import { sampleSettings, sampleState, liveSettings } from '../src/shared/defaults.js';
+import { sampleSettings, sampleState, liveSettings, GENERAL } from '../src/shared/defaults.js';
 import { mapIssues, mergeTasks, matchType, historyFromIssues } from '../src/shared/jira-map.js';
 import { validateSettings } from '../src/shared/validate.js';
 import { createService, pickDay } from '../src/service.js';
@@ -301,6 +301,7 @@ describe('service', () => {
     const res = await svc.handle('forgetPerson', ctx('max', true), { index: 0 });
     expect(res.settings.people[0]).toMatchObject({ name: 'Former member 1', accountId: null, archived: true });
     expect((await store.get('plan')).privateTime).toEqual([]);
+    expect(await store.get('plan-undo')).toEqual({});
   });
 
   it('lets members manage their own time off only when the setting allows it', async () => {
@@ -314,6 +315,145 @@ describe('service', () => {
     expect((await svc.handle('apply', ctx('ana'), leave(5, { from: 0 }))).error).toMatch(/no longer exists/);
     expect((await svc.handle('apply', ctx('pia'), { op: { kind: 'releaseLeave', who: 0, start: 4 } })).error).toBeTruthy();
     expect((await svc.handle('apply', ctx('ana'), { op: { kind: 'releaseLeave', who: 0, start: 4 } })).state.leave).toEqual([]);
+  });
+
+  const setGeneral = async (store, g) => { const s = await store.get('settings'); await store.set('settings', { ...s, general: { ...s.general, ...g } }); };
+
+  it('lets members request time off for the team manager to approve or decline', async () => {
+    const store = liveStore(), svc = createService({ store, jira: null, today: () => TODAY });
+    const ask = v => ({ op: { kind: 'requestLeave', v: { kind: 'leave', who: 0, start: 0, len: 1, reason: 'Sick leave', ...v } } });
+    expect((await svc.handle('apply', ctx('ana'), ask())).error).toMatch(/team manager/); // mode is off
+    await setGeneral(store, { memberLeave: 'request' });
+    expect((await svc.handle('apply', ctx('ana'), { op: { kind: 'draft', baseRev: 3, v: { kind: 'leave', who: 0, start: 0, len: 1 } } })).error).toMatch(/team manager/); // no direct change
+    expect((await svc.handle('apply', ctx('ana'), ask({ who: 1 }))).error).toMatch(/own time off/);
+    const sent = await svc.handle('apply', ctx('ana'), ask());
+    expect(sent.state.leave).toEqual([]);
+    const [req] = sent.state.leaveRequests;
+    expect(req).toMatchObject({ who: 0, start: 0, len: 1, reason: 'Sick leave', from: null });
+    expect((await svc.handle('getWorkspace', ctx('pia'), {})).state.leaveRequests).toEqual([]);
+    expect((await svc.handle('apply', ctx('ana'), { op: { kind: 'approveRequest', id: req.id } })).error).toMatch(/team manager/);
+    const ok = await svc.handle('apply', ctx('max'), { op: { kind: 'approveRequest', id: req.id } });
+    expect(ok.state.leave).toEqual([{ who: 0, start: 0, len: 1, reason: 'Sick leave' }]); // half a day: one 4h slot
+    expect(ok.state.leaveRequests).toEqual([]);
+    // The reason is for the team manager and the person only.
+    expect((await svc.handle('getWorkspace', ctx('pia'), {})).state.leave[0].reason).toBe('');
+    expect((await svc.handle('getWorkspace', ctx('ana'), {})).state.leave[0].reason).toBe('Sick leave');
+    // Move, declined; removal, cancelled by the member; removal, approved.
+    const move = (await svc.handle('apply', ctx('ana'), ask({ from: 0, start: 4 }))).state.leaveRequests[0];
+    expect((await svc.handle('apply', ctx('max'), { op: { kind: 'declineRequest', id: move.id } })).state.leave).toHaveLength(1);
+    const drop = (await svc.handle('apply', ctx('ana'), { op: { kind: 'requestLeave', v: { who: 0, from: 0, remove: true } } })).state.leaveRequests[0];
+    expect((await svc.handle('apply', ctx('max'), { op: { kind: 'cancelRequest', id: drop.id } })).state.leaveRequests).toEqual([]);
+    const again = (await svc.handle('apply', ctx('ana'), { op: { kind: 'requestLeave', v: { who: 0, from: 0, remove: true } } })).state.leaveRequests[0];
+    expect((await svc.handle('apply', ctx('max'), { op: { kind: 'approveRequest', id: again.id } })).state.leave).toEqual([]);
+    expect((await svc.handle('apply', ctx('max'), { op: { kind: 'approveRequest', id: again.id } })).error).toMatch(/already handled/);
+  });
+
+  it('undoes only the most recent change, for the team manager', async () => {
+    const svc = createService({ store: liveStore(), jira: null, today: () => TODAY });
+    await svc.handle('apply', ctx('max'), { op: { kind: 'note', p: 0, text: 'First' } });
+    const ws = await svc.handle('apply', ctx('max'), { op: { kind: 'note', p: 0, text: 'Second' } });
+    expect(ws.undo).toBe('Shared project note saved.');
+    expect((await svc.handle('getWorkspace', ctx('ana'), {})).undo).toBeNull();
+    expect((await svc.handle('undo', ctx('ana'), {})).error).toMatch(/team manager/);
+    const back = await svc.handle('undo', ctx('max'), {});
+    expect(back.state.notes[0]).toBe('First');
+    expect(back.state.changes[0].what).toBe('Undid: Shared project note saved.');
+    expect(back.undo).toBeNull();
+    expect((await svc.handle('undo', ctx('max'), {})).code).toBe('stale'); // one step only
+  });
+
+  it('repeats private time weekly and releases the later weeks together', () => {
+    const settings = sampleSettings(), M = createModel(settings, TODAY), state = sampleState(settings);
+    const { next } = M.applyOp(state, { kind: 'draft', v: { kind: 'private', who: 0, start: 20, hours: 4, name: 'Support duty', repeat: 4 } }, { person: 0 });
+    const series = next.privateTime.filter(b => b.name === 'Support duty');
+    expect(series.map(b => b.start)).toEqual([20, 30, 40, 50]);
+    const after = M.applyOp(next, { kind: 'releasePrivate', id: series[2].id, later: true }, { person: 0 }).next;
+    expect(after.privateTime.filter(b => b.name === 'Support duty').map(b => b.start)).toEqual([20, 30]);
+  });
+
+  it('moves a dragged task to the chosen person and day, if they cover it', () => {
+    const settings = sampleSettings(), M = createModel(settings, TODAY), state = sampleState(settings), plan = M.schedule(state);
+    const t = state.tasks.find(t => t.id === 'b5'), other = M.eligible(t).find(w => w !== plan.get('b5').who), nobody = [0, 1, 2, 3, 4].find(w => !M.eligible(t).includes(w));
+    const { slots } = M.makeDraft(state, plan, { kind: 'timing', taskId: 'b5', stamp: '2026-12-21', prefer: other });
+    expect(slots.get('b5')).toMatchObject({ who: other, start: M.cal.dayIndex('2026-12-21') * M.spd });
+    expect(() => M.makeDraft(state, plan, { kind: 'timing', taskId: 'b5', stamp: '2026-12-21', prefer: nobody })).toThrow(/does not cover/);
+  });
+
+  it('remembers the estimate and who finished a task, for the accuracy report', () => {
+    const settings = sampleSettings(), M = createModel(settings, TODAY), state = sampleState(settings);
+    const { next } = M.applyOp(state, { kind: 'draft', v: { kind: 'finish', taskId: 'a2', hours: 12 } }, { person: 2 });
+    expect(next.completed.at(-1)).toMatchObject({ est: state.tasks.find(t => t.id === 'a2').work * 4, hours: 12, who: 2 });
+  });
+
+  it('moves the Jira status on start and comments on issues whose plan changed', async () => {
+    const store = await jiraStore(), calls = [];
+    await setGeneral(store, { startStatus: 'In Progress', notifyChanges: true });
+    const plan = await store.get('plan');
+    plan.tasks[1] = { ...plan.tasks[1], id: 'jira-200', key: 'PA-2' };
+    await store.set('plan', plan);
+    const jira = { search: async () => ({ issues: [], isLast: true }), worklogs: async () => [], status: async () => 'To Do',
+      transitions: async () => [{ id: '11', name: 'Start', to: { name: 'In Progress' } }], transition: async (...a) => calls.push(['transition', ...a]), addComment: async (...a) => calls.push(['comment', ...a]) };
+    const svc = createService({ store, jira, today: () => TODAY });
+    await svc.handle('apply', ctx('ana'), { op: { kind: 'start', taskId: 'jira-100' } });
+    expect(calls).toEqual([['transition', 'PA-1', '11']]);
+    // Max goes away for a week: PA-2 (his) finishes later, and he and nobody else is mentioned.
+    calls.length = 0;
+    const ws = await svc.handle('apply', ctx('max'), { op: { kind: 'draft', baseRev: 4, v: { kind: 'leave', who: 1, start: 0, len: 10 } } });
+    expect(ws.error).toBeUndefined();
+    expect(calls).toHaveLength(1);
+    const [, key, body] = calls[0];
+    expect(key).toBe('PA-2');
+    expect(body.content[0].content[0]).toEqual({ type: 'mention', attrs: { id: 'max' } });
+    expect(body.content[0].content.at(-1).text).toMatch(/^Team plan update: forecast finish moved from/);
+    expect(JSON.stringify(body)).not.toMatch(/leave|away/i); // no private detail in Jira
+  });
+
+  it('shows the plan of an issue in its Jira panel', async () => {
+    const store = await jiraStore(), svc = createService({ store, jira: {}, today: () => TODAY });
+    expect(await svc.handle('issuePlan', { ...ctx('anyone'), issueId: '999' }, {})).toEqual({ planned: false });
+    const r = await svc.handle('issuePlan', { ...ctx('anyone'), issueId: '100' }, {});
+    expect(r).toMatchObject({ planned: true, status: 'Queued', owner: 'Ana Silva', project: 'P0', team: 'Team' });
+  });
+
+  it('keeps each team in its own storage and opens the team the caller is on', async () => {
+    const store = liveStore(), svc = createService({ store, jira: null, today: () => TODAY });
+    expect((await svc.handle('addTeam', ctx('max'), { name: 'Ops' })).error).toMatch(/administrators/);
+    expect((await svc.handle('addTeam', ctx('max', true), { name: 'Ops' })).teams).toEqual([{ id: 't0', name: 'Team' }, { id: 't1', name: 'Ops' }]);
+    // The new team starts on demo data, so everyone can open it; live team 0 comes first for its members.
+    const ws = await svc.handle('getWorkspace', ctx('ana'), {});
+    expect(ws).toMatchObject({ team: 't0', teams: [{ id: 't0', name: 'Team' }, { id: 't1', name: 'Ops' }] });
+    const ops = await svc.handle('getWorkspace', ctx('ana'), { team: 't1' });
+    expect(ops.me.demo).toBe(true);
+    await svc.handle('apply', ctx('x'), { team: 't1', op: { kind: 'note', p: 0, text: 'Ops note' } });
+    expect((await store.get('t1:plan')).notes[0]).toBe('Ops note');
+    expect((await store.get('plan')).notes).toEqual({ 1: 'internal' }); // team 0 untouched
+    expect((await svc.handle('getWorkspace', ctx('ana'), { team: 't9' })).team).toBe('t0');
+    expect((await svc.handle('apply', ctx('ana'), { team: 't9', op: { kind: 'note' } })).error).toMatch(/no longer exists/);
+  });
+
+  it('records time off taken as work logs on the time-off issues, when switched on', async () => {
+    const store = await jiraStore(), calls = [], jql = [];
+    const jira = { search: async (b) => (jql.push(b.jql), { issues: [{ id: '500', key: 'ABS-2', fields: { project: { key: 'ABS' }, summary: 'Sick leave' } }], isLast: true }),
+      worklogs: async () => [{ id: '7', author: { accountId: 'ana' }, started: '2026-11-24T12:00:00.000+0000', timeSpentSeconds: 4 * 3600 }],
+      addWorklog: async (...a) => calls.push(a) };
+    const svc = createService({ store, jira, today: () => TODAY });
+    const off = reason => ({ op: { kind: 'log', entry: { task: 'absence:' + reason, date: '2026-11-25', minutes: 480 } } });
+    expect((await svc.handle('apply', ctx('ana'), off('Vacation'))).error).toMatch(/issues for time off/); // switched off
+    await setGeneral(store, { absenceToJira: true, absenceIssues: { none: 'ABS-1', 'Sick leave': 'ABS-2' } });
+    await svc.handle('apply', ctx('ana'), off('Sick leave'));
+    await svc.handle('apply', ctx('ana'), off('Vacation')); // no issue of its own: goes on the first
+    expect(calls.map(c => c[0])).toEqual(['ABS-2', 'ABS-1']);
+    const ws = await svc.handle('getWorkspace', ctx('ana'), {});
+    expect(jql.at(-1)).toContain('key in ("ABS-1","ABS-2")');
+    expect(ws.state.logs[0]).toMatchObject({ absence: 'Sick leave', p: null, task: null, label: 'Time off · Sick leave', minutes: 240 });
+    expect(() => validateSettings({ ...(sampleSettings()), general: { ...GENERAL, absenceIssues: { none: 'not a key' } } })).toThrow(/Time off issue/);
+  });
+
+  it('keeps demo time off entries apart from internal work', () => {
+    const tasks = [];
+    const [entry] = applyLogOp([], { kind: 'log', entry: { id: 'entry-0002', task: 'absence:Vacation', date: '2026-11-25', minutes: 480 } }, { person: 0 }, tasks);
+    expect(entry).toMatchObject({ absence: 'Vacation', task: null, p: null });
+    expect(() => applyLogOp([], { kind: 'log', entry: { id: 'entry-0003', task: 'absence:Party', date: '2026-11-25', minutes: 60 } }, { person: 0 }, tasks)).toThrow(/kind of time off/);
   });
 
   it('sets the Jira assignee to the planned owner', async () => {

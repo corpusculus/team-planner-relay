@@ -23,11 +23,15 @@ work logs team members logged on those issues. When an administrator adds team m
 
 In Forge storage, inside your installation:
 - **Team settings:** people's display names, Jira account IDs, job titles, roles in the app and skills; projects, task types and estimation rules.
-- **Planning data:** tasks (including Jira issue keys and summaries), estimates, assignments, blockers, agreed dates, private-time labels, absences and shared project notes.
-- **Estimation history:** hours spent on finished tasks, with no personal details.
+- **Planning data:** tasks (including Jira issue keys and summaries), estimates, assignments, blockers, agreed dates, private-time labels, absences with an optional reason (such as sick leave), time-off requests and shared project notes.
+- **Estimation history:** hours spent on finished tasks and their estimates. For tasks finished in Relay it also records who finished them, for the team manager's estimate accuracy report.
 
 Timesheets are not stored by the app: time is logged as Jira work logs, which Jira stores and controls. The app only writes to Jira
-when a person logs, edits or deletes their own time, or a team manager sets an issue's assignee or due date.
+when a person logs, edits or deletes their own time, or a team manager sets an issue's assignee or due date. If an administrator turns
+them on, it also moves an issue's status when work starts or finishes, and comments on issues whose planned owner or finish date changed;
+these comments name the planned people and dates only, never absences or private time. If time off in Jira is turned on, a person's
+time off becomes their own work logs on the issues the administrator chose; anyone who can see those issues sees the hours, and the
+issue it is on can show the kind of time off.
 
 ## Who can see it
 
@@ -35,7 +39,8 @@ Access is decided by your site's administrators in the app's settings and enforc
 - Team members see their own assignments and timesheets.
 - Team managers see the team plan and the team's logged time, but not work log comments in Relay.
 - Project managers see their projects' outlook, and only the issue titles Jira lets them browse.
-- Private-time labels are visible only to their owner. Work log comments are visible in Jira to anyone who can see the issue.
+- Private-time labels are visible only to their owner. Absence reasons are visible only to the person and the team manager.
+- Anyone who can open a Jira issue sees its Team plan panel: planned owner, dates, effort and the project forecast. Work log comments are visible in Jira to anyone who can see the issue.
 
 ## Logs
 

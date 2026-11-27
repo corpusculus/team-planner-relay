@@ -1,9 +1,11 @@
 // Relay settings (Jira admin page): planning units, task types, estimation, people, projects and Jira mapping.
 import { estimate, multiplier, toSlots } from '../../src/shared/estimate.js';
-import { call, isLocal } from '../common/backend.js';
+import { call, isLocal, session } from '../common/backend.js';
 import { $, esc, options, modal } from '../common/ui.js';
+import { rulesHtml } from '../common/rules.js';
+import { leaveMode, LEAVE_REASONS } from '../../src/shared/model.js';
 
-let saved, s, meta, dirty = false, tab = 'start', openCards = new Set(), jiraProjects = [], search = { target: null, query: '', users: [] }, trial = { type: 0, p: 0, s: 0 };
+let teams = [], saved, s, meta, dirty = false, tab = 'start', openCards = new Set(), jiraProjects = [], search = { target: null, query: '', users: [] }, trial = { type: 0, p: 0, s: 0 };
 
 const status = (text, error = false) => { $('status').textContent = text; $('status').className = 'grow ' + (error ? 'late' : 'sub'); };
 // Save and Discard are only live while there is something to save.
@@ -12,8 +14,10 @@ const markDirty = () => { dirty = true; syncSave(); status('Unsaved changes'); }
 
 async function load() {
   try {
+    teams = (await call('listTeams')).teams;
+    if (!teams.some(t => t.id === session.team)) session.team = teams[0].id;
     meta = await call('getSettings');
-    saved = meta.settings; s = structuredClone(saved); dirty = false;
+    saved = meta.settings; saved.general.absenceIssues ??= {}; s = structuredClone(saved); dirty = false;
     if (!s.demo && meta.jira) jiraProjects = (await call('jiraProjects')).projects;
     render(); status(meta.refreshedAt ? 'Jira refreshed ' + new Date(meta.refreshedAt).toLocaleString('en-GB') : '');
   } catch (e) { $('view').innerHTML = '<div class="error-panel">' + esc(e.message) + '</div>'; }
@@ -52,6 +56,7 @@ function render() {
   const g = s.general;
   syncSave();
   $('plannerLink').hidden = !isLocal;
+  $('teamPick').hidden = teams.length < 2; $('teamPick').innerHTML = options(teams.map(t => [t.id, t.name]), session.team);
   const team = s.people.filter(p => !p.archived), linked = team.filter(p => p.accountId).length, connected = s.projects.filter(p => p.jiraKey && !p.archived).length;
   const step = (done, title, detail, action) => '<div class="step' + (done ? ' complete' : '') + '"><span class="step-mark" aria-hidden="true">' + (done ? '✓' : '') + '</span><div class="step-text"><b>' + title + '</b><span class="hint">' + detail + '</span></div>' + action + '</div>';
   const go = (k, label) => '<button type="button" data-tab="' + k + '">' + label + ' →</button>';
@@ -69,7 +74,9 @@ function render() {
     field('Workday starts at', num('general.dayStartHour', g.dayStartHour, 'min="0" max="23" step="1"'), 'Used for slot labels only.') +
     field('Planning start (a Monday)', '<input type="date" data-path="general.planStart" value="' + esc(g.planStart) + '">', 'Week 1 of the calendar. Workdays are Monday–Friday.') +
     field('Internal work issue', text('general.internalIssue', g.internalIssue ?? '', 'placeholder="e.g. ADMIN-12"'), 'Jira issue where time for non-project work is logged.') +
-    group('Time off', '<div class="checks">' + bool('general.memberLeave', g.memberLeave, 'Members can add, reschedule and remove their own time off') + '</div>', 'When off, only the team manager records time off. Either way the team manager can change anyone’s.', 'full') +
+    field('Members’ own time off', sel('general.memberLeave', [['off', 'Only the team manager changes it'], ['request', 'Members request, the team manager approves'], ['free', 'Members change it freely']], leaveMode(g)), 'Members add, reschedule and remove their time off from My calendar. The team manager can always change anyone’s.', 'full') +
+    group('Time off in Jira', '<div class="checks">' + bool('general.absenceToJira', g.absenceToJira, 'Record time off taken as Jira work logs, so it is kept apart from customer work') + '</div>', g.absenceToJira ? 'Members record it from their timesheet once the day has come. Each kind of time off goes on its own issue below; a kind left empty uses the “no reason given” issue.' : 'Off: time off stays in Relay only. Turn it on once you have a Jira project for it.', 'full') +
+    (g.absenceToJira ? ['none', ...LEAVE_REASONS].map(r => field(r === 'none' ? 'Time off (no reason given)' : r, text('general.absenceIssues.' + r, g.absenceIssues?.[r] ?? '', 'placeholder="e.g. ABS-' + (r === 'none' ? 1 : LEAVE_REASONS.indexOf(r) + 2) + '"'))).join('') : '') +
     group('Public holidays', '<div class="holiday-editor"><div class="link-row"><input type="date" id="holidayNew" aria-label="Holiday date"><button type="button" id="holidayAdd">Add holiday</button></div><div class="checks">' + (s.holidays ?? []).map((d, i) => '<span class="chip">' + esc(d) + '<button type="button" data-rm-holiday="' + i + '" aria-label="Remove ' + esc(d) + '">×</button></span>').join('') + '</div></div>', 'Nobody is planned on these days.', 'full') +
     '</div>');
 
@@ -138,29 +145,20 @@ function render() {
         '</div>', p.archived);
     }).join(''));
 
+  const jiraUpdates = panel('Jira updates', 'What Relay writes to Jira on its own. Works in live mode, with the Jira permissions of the person making the change.',
+    '<div class="grid-form">' +
+    field('Status when work starts', text('general.startStatus', g.startStatus ?? '', 'placeholder="e.g. In Progress"'), 'Jira status name. Empty: Relay leaves the status alone.') +
+    field('Status when work finishes', text('general.doneStatus', g.doneStatus ?? '', 'placeholder="e.g. Done"'), 'Used when someone records the finish.') +
+    group('Tell people about plan changes', '<div class="checks">' + bool('general.notifyChanges', g.notifyChanges, 'Comment on a Jira issue when its planned owner changes or its finish moves later') + '</div>', 'The comment mentions the new and previous owner, so Jira notifies them. At most 20 issues per change.', 'full') +
+    '</div>');
+  const teamPanel = panel('Teams', 'Each team has its own people, projects, plan and settings. People open the teams they are on.',
+    '<div class="grid-form">' + field('This team’s name', '<div class="link-row"><input id="teamName" maxlength="60" value="' + esc(teams.find(t => t.id === session.team)?.name ?? '') + '"><button type="button" id="teamRename">Rename</button></div>') +
+    field('Add a team', '<div class="link-row"><input id="teamNew" maxlength="60" placeholder="Team name"><button type="button" id="teamAdd">Add team</button></div>', 'A new team starts with the demo data. Switch it to live under Set up Relay.') + '</div>');
   const unmapped = s.demo ? '' : panel('Needs mapping', 'Jira issues from the last refresh that Relay could not plan. Fix a task type rule, a component, or a project contact, then refresh.',
     meta.unmapped.length ? (meta.unmappedTotal > meta.unmapped.length ? '<p class="hint">Showing ' + meta.unmapped.length + ' of ' + meta.unmappedTotal + '.</p>' : '') + table(['Issue', 'Project', 'Reason'], meta.unmapped.map(u => ['<b>' + esc(u.key) + '</b> ' + esc(u.summary), esc(u.project), esc(u.reason)])) : '<p class="empty">Nothing to map.</p>');
 
-  const sections = { start: start + unmapped, people, projects, types: types + systems, estimation, calendar: general, rules: rulesView() };
+  const sections = { start: start + unmapped + jiraUpdates + teamPanel, people, projects, types: types + systems, estimation, calendar: general, rules: rulesHtml(s, !s.demo && meta.jira) };
   $('view').innerHTML = '<nav class="section-tabs" aria-label="Settings sections">' + TABS.map(([k, l]) => '<button type="button" class="tab' + (k === tab ? ' active' : '') + '" data-tab="' + k + '" aria-current="' + (k === tab ? 'page' : 'false') + '">' + l + '</button>').join('') + '</nav>' + sections[tab];
-}
-
-/** How the team uses the planner and how forecasts are calculated, with the numbers from these settings. */
-function rulesView() {
-  const g = s.general, timeInJira = !s.demo && meta.jira;
-  const rules = [
-    ['Choose work', 'Members open My work for their current task and upcoming assignments. The team manager uses Work queue to see active, ready, and waiting work across projects. Open an assignment to start on its forecast slot.'],
-    ['Hours and slots', 'Effort is entered in hours and planned in ' + g.slotHours + '-hour slots, ' + g.workdayHours / g.slotHours + ' per ' + g.workdayHours + '-hour workday. Estimates round up to a whole slot, so a person never carries more than ' + g.workdayHours / g.slotHours + ' tasks in a day.'],
-    ['Days off', 'Public holidays and each person’s working days and hours come from Relay settings. Work is planned only in the slots someone works and pauses over days off.'],
-    ['How estimates are made', 'Each task type has a base effort and buffer. Relay first looks for at least ' + g.minSamples + ' finished tasks of the same type in the last ' + g.historyMonths + ' months: same project and system, then same system, then any. The estimate is the P' + g.estimatePercentile + ' of their actual hours and the buffer runs to P' + g.bufferPercentile + '. Without history it uses the type default × system size × complexity factors such as data transfer or VPN access. Types can instead take Jira’s original estimate or story points.'],
-    ['Work and buffer', 'Enter the estimated hands-on effort. Adjust its buffer for known uncertainty. Troubleshooting uses the reserve first. Record total hands-on hours at completion; this releases unused time and teaches the estimator.'],
-    ['Waiting for someone else', 'From an active task choose Mark waiting. Record the work already performed and what will unblock it. The remaining work stops reserving capacity. Its dependent dates show Pending. Resolve the blocker to put the remaining work back in the queue.'],
-    ['Forecasts and commitments', 'A forecast can move when work, priority, or availability changes. Set a fixed start only when a date has been agreed. Preview the effect of changes before applying them. A fixed start with an unresolved prerequisite is at risk.'],
-    ['Private time and coverage', 'The team can reserve private work and record absences under Other changes.' + (g.memberLeave ? ' Members add, reschedule and remove their own time off from My calendar.' : '') + ' The planner uses qualified project contacts and gives the primary contact the tie. Project managers see the forecast, shared note, and agreed starts.'],
-    ['Timesheets and reports', timeInJira ? 'Time is logged only in Jira: Log time adds a Jira work log on the issue' + (g.internalIssue ? ', and internal work goes on ' + esc(g.internalIssue) : '') + '. The timesheet and reports read those work logs back. Team managers see totals by person and project, project managers see their project, and Export CSV downloads the chosen period.' : 'Members record actual time by day and task. Internal work has its own category. Members can correct their entries. Team managers see totals by person and project. Project managers see aggregate project hours. Entry notes are personal. Export CSV downloads the chosen period.'],
-    s.demo ? ['Using the demo', 'This is fictional data. Demo view lets you try the three roles. A Jira administrator can connect real Jira projects in Relay settings.'] : ['Jira', 'Tasks come from the connected Jira projects and are read-only in Jira. Jira workflow status stays in Jira; Relay’s start, waiting and finish actions are planning events. Refresh from Jira to pick up new issues.']
-  ];
-  return '<div class="rules-grid">' + rules.map(([title, body]) => '<article class="rule"><h2>' + title + '</h2><p>' + body + '</p></article>').join('') + '</div>';
 }
 
 /** Live estimate preview so admins can see what the numbers produce before saving. */
@@ -244,6 +242,14 @@ document.addEventListener('click', async e => {
     status('Reading finished issues from Jira…');
     try { const r = await call('importHistory'); await load(); status('Imported ' + r.imported + ' finished issues.'); } catch (err) { status(err.message, true); }
   }
+  if (b.id === 'teamAdd' || b.id === 'teamRename') {
+    if (dirty) return status('Save or discard your changes first.', true);
+    try {
+      const add = b.id === 'teamAdd', r = await call(add ? 'addTeam' : 'renameTeam', { name: $(add ? 'teamNew' : 'teamName').value });
+      teams = r.teams;
+      if (add) { session.team = teams.at(-1).id; tab = 'start'; await load(); status('Team added. You are now editing ' + teams.at(-1).name + '.'); } else { render(); status('Team renamed.'); }
+    } catch (err) { status(err.message, true); }
+  }
   if (b.id === 'save') await run(() => call('saveSettings', { settings: s }), 'Settings saved.');
   if (b.id === 'discard') { s = structuredClone(saved); dirty = false; render(); status('Changes discarded.'); }
   if (b.dataset.find !== undefined) {
@@ -278,10 +284,14 @@ document.addEventListener('click', async e => {
   }
 });
 async function run(fn, message) {
-  try { meta = await fn(); saved = meta.settings; s = structuredClone(saved); dirty = false; render(); status(message); }
+  try { meta = await fn(); saved = meta.settings; saved.general.absenceIssues ??= {}; s = structuredClone(saved); dirty = false; render(); status(message); }
   catch (err) { status(err.message, true); }
 }
 $('close').onclick = () => $('modal').close();
+$('teamPick').onchange = async () => {
+  if (dirty) { $('teamPick').value = session.team; return status('Save or discard your changes first.', true); }
+  session.team = $('teamPick').value; openCards.clear(); await load();
+};
 $('plannerLink').onclick = () => { location.href = '../planner/'; };
 window.addEventListener('beforeunload', e => { if (dirty) e.preventDefault(); });
 

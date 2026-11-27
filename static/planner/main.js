@@ -1,8 +1,9 @@
 // Relay planner UI (ported from team-planner.html). The backend owns the plan; this page previews and sends changes.
-import { createModel } from '../../src/shared/model.js';
+import { createModel, leaveMode, absenceIssue, LEAVE_REASONS } from '../../src/shared/model.js';
 import { estimate, toSlots } from '../../src/shared/estimate.js';
-import { call, openIssue, isLocal } from '../common/backend.js';
+import { call, openIssue, isLocal, session } from '../common/backend.js';
 import { $, esc, options, modal } from '../common/ui.js';
+import { rulesHtml } from '../common/rules.js';
 
 const colors = [['#248275', '#d8eee8', '#184e46'], ['#7460a8', '#e9e3f5', '#493c69'], ['#ad7331', '#f5e9d4', '#6e4d24'], ['#4676a4', '#dfeaf5', '#304e70'], ['#aa626b', '#f6e4e5', '#6b3c44'], ['#68813f', '#e8efd9', '#455827'],
   ['#a04f93', '#f3e1ef', '#662f5d'], ['#2f8fa3', '#d9eef2', '#1d5a67'], ['#b5553c', '#f7e2db', '#74331f'], ['#5560b8', '#e1e4f7', '#353d7a'], ['#4d9150', '#deefdd', '#2d5c30'], ['#9c8a1f', '#f3efcf', '#5f5410'],
@@ -10,17 +11,21 @@ const colors = [['#248275', '#d8eee8', '#184e46'], ['#7460a8', '#e9e3f5', '#493c
 
 // Workspace (set by useWorkspace)
 let settings, today, me, M, people, projects, systems, types, state, plan;
-let fmt, span, slotLabel, hrs, daysLate, dueText, who, effectiveWork, duration, spent, statusOf, eligible, finish, off, take;
+let teams = [], undo = null;
+try { session.team = sessionStorage.getItem('relay.team') ?? undefined; } catch {}
+let fmt, span, slotLabel, hrs, leaveText, daysLate, dueText, who, effectiveWork, duration, spent, statusOf, eligible, finish, off, take;
 let spd, slotH, weekSlots, timeInJira = false;
 // View state
 let role = 'member', pmProject = 0, member = 2;
 try { const last = sessionStorage.getItem('relay.preview.role'); if (['member', 'team', 'pm'].includes(last)) role = last; const w = sessionStorage.getItem('relay.preview.member'); if (w !== null) member = Number(w); } catch {}
-let period = null, pmCal = 'all', personFilter = 'all', tab = role === 'pm' ? 'outlook' : 'home', filter = 'all', showAll = false, draft = null, formValues = null, busy = false, booted = false;
+let accuracyBy = 'type', period = null, pmCal = 'all', personFilter = 'all', tab = role === 'pm' ? 'outlook' : 'home', filter = 'all', showAll = false, draft = null, formValues = null, busy = false, booted = false;
 
 function useWorkspace(ws) {
   settings = ws.settings; today = ws.today; me = ws.me; state = ws.state;
   M = createModel(settings, today);
-  ({ people, projects, systems, types, fmt, span, slotLabel, hrs, daysLate, dueText, who, effectiveWork, duration, spent, statusOf, eligible, finish, off, take, spd, slotH, weekSlots } = M);
+  if (ws.teams) { teams = ws.teams; session.team = ws.team; }
+  undo = ws.undo ?? null;
+  ({ people, projects, systems, types, fmt, span, slotLabel, hrs, leaveText, daysLate, dueText, who, effectiveWork, duration, spent, statusOf, eligible, finish, off, take, spd, slotH, weekSlots } = M);
   if (!me.demo) { role = me.access; member = me.person; }
   if (role === 'pm' && !me.pmProjects.includes(pmProject)) pmProject = me.pmProjects[0] ?? 0;
   if (!people[member]) member = 0;
@@ -99,7 +104,7 @@ async function send(op, message = 'Change applied. The schedule and milestone fo
     useWorkspace(ws);
     if ($('modal').open) $('modal').close();
     render();
-    announce(message);
+    announce(message + (ws.warning ? ' ' + ws.warning : ''));
     return true;
   } catch (e) {
     if (e.code === 'stale') { await load(); }
@@ -129,6 +134,7 @@ function render() {
   const pages = personal ? ['home', 'schedule', 'sheet', 'report'] : pm ? ['outlook', 'schedule', 'report'] : ['home', 'queue', 'schedule', 'coverage', 'report'];
   if (!pages.includes(tab)) tab = pages[0];
   $('roleBox').hidden = !me.demo; $('role').value = role;
+  $('teamPick').hidden = teams.length < 2; $('teamPick').innerHTML = options(teams.map(t => [t.id, t.name]), session.team);
   $('memberPreview').hidden = !me.demo || !personal;
   $('memberPreview').innerHTML = options(active(people).map(([p, i]) => [i, p.name]), member);
   $('identity').hidden = me.demo; $('identity').textContent = me.demo ? '' : me.name + ' · ' + { member: 'Team member', team: 'Team manager', pm: 'Project manager' }[role];
@@ -138,7 +144,7 @@ function render() {
   $('footnote').textContent = me.demo ? 'Demo portfolio · Fictional data · Switch to live mode in Relay settings' : 'Live plan · ' + (state.refreshedAt ? 'Jira refreshed ' + new Date(state.refreshedAt).toLocaleString('en-GB') : 'Not refreshed from Jira yet') + (state.unmapped.length && role === 'team' ? ' · ' + state.unmapped.length + ' Jira issues need mapping (see settings)' : '');
   $('simulate').hidden = !(role === 'team' && ['home', 'queue', 'schedule', 'coverage'].includes(tab) || personal && ['home', 'sheet', 'schedule'].includes(tab));
   $('simulate').textContent = personal ? (tab === 'schedule' ? 'Protect time' : '＋ Log time') : '＋ Add task';
-  const ownLeave = personal && tab === 'schedule' && settings.general.memberLeave;
+  const ownLeave = personal && tab === 'schedule' && leaveMode(settings.general) !== 'off';
   $('otherChanges').hidden = $('simulate').hidden || (personal && !ownLeave);
   $('otherChanges').textContent = personal ? 'Time off' : 'Other changes';
   const title = tab === 'home' ? (personal ? 'My work' : 'Team overview') : tab === 'sheet' ? 'My timesheet' : tab === 'schedule' && personal ? 'My calendar' : tab === 'schedule' && pm ? 'Project calendar' : tab === 'report' ? (personal ? 'My report' : pm ? 'Project report' : 'Team report') : pageInfo[tab][0];
@@ -162,7 +168,7 @@ function render() {
 
 function board() {
   // A project manager sees the people on their project; work on other projects only as busy time.
-  const canLeave = role === 'team' || (role === 'member' && settings.general.memberLeave);
+  const canLeave = role === 'team' || (role === 'member' && leaveMode(settings.general) !== 'off');
   const pmMode = role === 'pm', mine = pmMode ? (pmCal === 'all' ? me.pmProjects : [Number(pmCal)]) : [];
   const onProject = w => mine.some(i => projects[i] && (w === projects[i].lead || w === projects[i].back)) || state.tasks.some(t => mine.includes(t.p) && plan.get(t.id)?.who === w);
   const busy = '<div class="block other" style="STYLE" title="Busy with other work"><b>Other work</b><small>Busy</small></div>';
@@ -200,22 +206,24 @@ function board() {
       const fixed = state.fixed.some(f => f.taskId === t.id), workEnd = Math.min(x.end, take(w, x.start, Math.max(1, effectiveWork(t) - spent(t))).at(-1) + 1);
       const label = t.actual != null ? 'Done · ' : t.started ? 'In progress · ' : fixed ? 'Fixed start · ' : '';
       const card = (css, title, subtitle) => '<button class="block ' + css + '" data-task="' + t.id + '" style="STYLE' + color(t.p) + '" title="' + esc(projects[t.p].name + ' · ' + t.name + ' · ' + subtitle) + '"><b>' + esc(title) + '</b><small>' + esc(subtitle) + '</small></button>';
-      addWorking(x.start, workEnd, card((fixed ? 'meeting fixed ' : '') + (t.actual != null ? 'done' : ''), projects[t.p].name, label + t.name));
+      // The team manager drags a task that has not started to another day or person; that sets a fixed start there.
+      const drag = role === 'team' && !t.started && !t.wait && t.actual == null && t.firstStart == null ? '" draggable="true" data-drag="' + t.id : '';
+      addWorking(x.start, workEnd, card((fixed ? 'meeting fixed ' : '') + (t.actual != null ? 'done' : '') + drag, projects[t.p].name, label + t.name));
       if (workEnd < x.end) addWorking(workEnd, x.end, card('buffer', 'Buffer', projects[t.p].name + ' · ' + t.name));
     }
     for (const block of state.privateTime.filter(x => x.who === w)) add(block.start, block.start + block.len, pmMode ? plain('private', 'Unavailable', 'Private time') : plain('private', dense ? 'Private' : 'Private time', block.name, 'data-private="' + block.id + '"'));
     // One block per time-off entry, so it can be opened to reschedule or remove it.
-    for (const l of state.leave.filter(l => l.who === w)) add(l.start, l.start + l.len, plain('away', 'Time off', 'Unavailable', canLeave ? 'data-leave-who="' + w + '" data-leave-start="' + l.start + '"' : ''));
+    for (const l of state.leave.filter(l => l.who === w)) add(l.start, l.start + l.len, plain('away', 'Time off', l.reason || 'Unavailable', canLeave ? 'data-leave-who="' + w + '" data-leave-start="' + l.start + '"' : ''));
     for (let d = start; d < start + cols; d++) { if (!off(w, d)) continue; let e = d + 1; while (e < start + cols && off(w, e)) e++; add(d, e, M.isHoliday(d) ? plain('away', 'Holiday', 'Public holiday') : plain('away', dense ? 'Off' : 'Not working', 'Outside working hours')); d = e - 1; }
     // Free time from now on, so managers can see where a task fits; clicking it starts "Add a task" there.
     const load = role === 'member' ? [] : loadSlots(start, cols, w).map((k, i) => (k === 'free' && start + i < M.now ? 'past' : k));
     for (let d = 0; d < load.length; d++) { if (load[d] !== 'free') continue; let e = d + 1; while (e < load.length && load[e] === 'free') e++; add(start + d, start + e, '<button class="block free" data-free-who="' + w + '" data-free-start="' + (start + d) + '" data-free-hours="' + (e - d) * slotH + '" style="STYLE" title="Free · ' + (e - d) * slotH + 'h · Add a task here"><b>Free · ' + (e - d) * slotH + 'h</b><small>Add a task</small></button>'); d = e - 1; }
     const freeHours = load.filter(k => k === 'free').length * slotH;
-    return '<div class="person grid"><div class="who"><span class="avatar">' + esc(p.initials) + '</span><div><b>' + esc(p.name) + '</b><small>' + (role === 'member' ? esc(p.role || '') : '<span class="free-h">' + freeHours + 'h free</span>') + '</small></div></div><div class="lane" style="grid-template-columns:repeat(' + cols + ',minmax(0,1fr))">' + todayCol + blocks.join('') + '</div></div>';
+    return '<div class="person grid"><div class="who"><span class="avatar">' + esc(p.initials) + '</span><div><b>' + esc(p.name) + '</b><small>' + (role === 'member' ? esc(p.role || '') : '<span class="free-h">' + freeHours + 'h free</span>') + '</small></div></div><div class="lane" data-who="' + w + '" data-start="' + start + '" data-cols="' + cols + '" style="grid-template-columns:repeat(' + cols + ',minmax(0,1fr))">' + todayCol + blocks.join('') + '</div></div>';
   }).join('');
   const key = (css, text) => '<span><i class="block ' + css + '"></i>' + text + '</span>';
   const legend = '<div class="legend" style="' + color(0) + '">' + key('', 'Planned work') + key('buffer', 'Buffer for troubleshooting') + key('private', 'Private time') + key('away', 'Away or not working') + (pmMode ? key('other', 'Other work') : '') + (role === 'member' ? '' : key('free', 'Free')) + '<span>' + slotH + 'h slots</span></div>';
-  const head = '<div class="section-head">' + periodPicker() + '</div>';
+  const head = '<div class="section-head">' + periodPicker() + (role === 'team' ? '<span class="sub">Drag a task to move it</span>' : '') + '</div>' + myRequests();
   if (!days) return '<section class="panel">' + head + '<p class="empty">No workdays in this period.</p></section>';
   return '<section class="panel">' + head + '<div class="scroll"><div class="board" style="--days:' + days + ';min-width:' + Math.max(750, 175 + days * (dense ? 100 : 110)) + 'px"><div class="grid days"><div>Team member</div>' + Array.from({ length: days }, (_, i) => '<div' + (d0 + i === todayDay() ? ' class="today"' : '') + '>' + fmt(start + i * spd, { weekday: 'short', day: 'numeric' }) + (d0 + i === todayDay() ? ' · Today' : '') + (M.isHoliday(start + i * spd) ? ' · Holiday' : '') + '</div>').join('') + '</div>' + rows + '</div></div><div class="foot">' + legend + '</div></section>';
 }
@@ -321,7 +329,7 @@ function changeForm(v = {}) {
   if (kind === 'timing') {
     const task = state.tasks.find(t => t.id === v.taskId), fixed = state.fixed.find(f => f.taskId === task.id);
     const stamp = v.stamp ?? (fixed ? M.cal.isoOfDay(Math.floor(fixed.start / spd)) : '');
-    modal('Task timing', '<p><b>' + esc(projects[task.p].name) + ' · ' + esc(task.name) + '</b><br>Currently planned for ' + slotLabel(plan.get(task.id).start) + '.</p><form id="changeForm"><input type="hidden" name="kind" value="timing"><input type="hidden" name="taskId" value="' + task.id + '"><label class="field">Fixed start date (optional)<input type="date" name="stamp" min="' + settings.general.planStart + '" value="' + esc(stamp) + '"></label><p class="sub">Use an agreed date to anchor the start and share this task and date with the PM. Leave blank for flexible scheduling.</p>' + footer + '</form>');
+    modal('Task timing', '<p><b>' + esc(projects[task.p].name) + ' · ' + esc(task.name) + '</b><br>Currently planned for ' + slotLabel(plan.get(task.id).start) + '.</p><form id="changeForm"><input type="hidden" name="kind" value="timing"><input type="hidden" name="taskId" value="' + task.id + '">' + (v.prefer != null && v.prefer !== '' ? '<input type="hidden" name="prefer" value="' + esc(v.prefer) + '"><p class="source">Preferred owner: ' + esc(who(Number(v.prefer)).name) + '</p>' : '') + '<label class="field">Fixed start date (optional)<input type="date" name="stamp" min="' + settings.general.planStart + '" value="' + esc(stamp) + '"></label><p class="sub">Use an agreed date to anchor the start and share this task and date with the PM. Leave blank for flexible scheduling.</p>' + footer + '</form>');
     return;
   }
   // Rescheduling time off (`from` is the entry's current start) keeps the person and the kind of change fixed.
@@ -340,12 +348,15 @@ function changeForm(v = {}) {
     fields += (block ? '<input type="hidden" name="blockId" value="' + esc(block.id) + '">' : '') +
       '<label class="field full">Private work label<input name="name" maxlength="70" required value="' + esc(v.name ?? 'Focus time') + '"></label>' +
       (role === 'member' ? '' : selectField('Team member', 'who', active(people).map(([x, i]) => [i, x.name]), v.who ?? 0, true)) +
-      selectField('First protected slot', 'start', dates, v.start ?? Math.max(periodDays()[0] * spd, M.now)) + selectField('Duration', 'hours', hourChoices, v.hours ?? (v.len ? v.len * slotH : settings.general.workdayHours));
+      selectField('First protected slot', 'start', dates, v.start ?? Math.max(periodDays()[0] * spd, M.now)) + selectField('Duration', 'hours', hourChoices, v.hours ?? (v.len ? v.len * slotH : settings.general.workdayHours)) +
+      (block ? '' : selectField('Repeat', 'repeat', [[1, 'Does not repeat'], ...Array.from({ length: 25 }, (_, k) => [k + 2, 'Every week, ' + (k + 2) + ' times'])], v.repeat ?? 1, true));
   }
-  if (kind === 'leave') fields += (moving ? '<input type="hidden" name="from" value="' + Number(v.from) + '">' : '') + (role === 'member' || moving ? '' : selectField('Team member', 'who', active(people).map(([x, i]) => [i, x.name]), v.who ?? 0, true)) + selectField('First day away', 'start', dayDates, v.start ?? Math.max(periodDays()[0] * spd, M.now)) + selectField('Time away', 'days', dayChoices, v.days ?? 2);
+  // Time off is counted in slots, so part of a day (a slot of a few hours) works too.
+  const leaveLengths = [...Array.from({ length: spd - 1 }, (_, k) => [k + 1, hrs(k + 1)]), ...dayChoices.map(([d, l]) => [d * spd, l])];
+  if (kind === 'leave') fields += (moving ? '<input type="hidden" name="from" value="' + Number(v.from) + '">' : '') + (role === 'member' || moving ? '' : selectField('Team member', 'who', active(people).map(([x, i]) => [i, x.name]), v.who ?? 0, true)) + selectField('From', 'start', spd > 1 ? dates : dayDates, v.start ?? Math.max(periodDays()[0] * spd, M.now)) + selectField('Time away', 'len', leaveLengths, v.len ?? 2 * spd) + selectField('Reason', 'reason', [['', 'Not given'], ...LEAVE_REASONS.map(r => [r, r])], v.reason ?? '', true) + '<p class="source full">Only the team manager' + (role === 'member' ? ' and you see' : ' and the person see') + ' the reason.</p>';
   if (kind === 'extend') fields += selectField('Task', 'taskId', state.tasks.filter(t => t.actual == null).map(t => [t.id, projects[t.p].name + ' · ' + t.name]), v.taskId, true) + selectField('Additional expected hours', 'hours', hourChoices, v.hours ?? slotH, true);
   const adding = isTask;
-  modal(adding ? 'Add a task' : moving ? 'Reschedule time off' : kind === 'leave' && role === 'member' ? 'Time off' : role === 'member' ? 'Protect time' : 'Change the plan', '<p>' + (adding ? 'Preview where it lands and what it moves before you apply it.' : current ? esc(who(current.who).name) + ' is away ' + span(current.start, current.start + current.len - 1) + '. Choose the new dates.' : 'Preview the effect on the published schedule. You decide whether to apply it.') + '</p><form id="changeForm"><div class="formgrid">' + fields + '</div>' + footer + '</form>');
+  modal(adding ? 'Add a task' : moving ? (requesting() ? 'Request new dates' : 'Reschedule time off') : kind === 'leave' && role === 'member' ? (requesting() ? 'Request time off' : 'Time off') : role === 'member' ? 'Protect time' : 'Change the plan', '<p>' + (adding ? 'Preview where it lands and what it moves before you apply it.' : current ? esc(who(current.who).name) + ' is away ' + leaveText(current) + '. Choose the new dates.' : kind === 'leave' && requesting() ? 'Preview the effect, then send the request. It counts once the team manager approves it.' : 'Preview the effect on the published schedule. You decide whether to apply it.') + '</p><form id="changeForm"><div class="formgrid">' + fields + '</div>' + footer + '</form>');
 }
 
 function preview(v) {
@@ -355,7 +366,7 @@ function preview(v) {
   const changed = projects.map((p, i) => ({ p, i, old: finish(state, plan, i), now: finish(next, slots, i) })).filter(x => x.old !== x.now);
   if (role === 'member') {
     const own = moved.filter(t => plan.get(t.id).who === member || slots.get(t.id).who === member);
-    modal('Change preview', '<p>' + esc(summary) + '</p><div class="note">' + own.length + ' of your assignments change.</div>' + own.map(t => '<div class="detail">' + esc(projects[t.p].name) + ' · ' + esc(t.name) + '<small>' + span(plan.get(t.id).start, plan.get(t.id).end - 1) + ' → ' + span(slots.get(t.id).start, slots.get(t.id).end - 1) + '</small></div>').join('') + '<div class="actions"><button data-dismiss>Discard</button><button class="primary" id="apply">Apply change</button></div>');
+    modal('Change preview', '<p>' + esc(summary) + '</p><div class="note">' + own.length + ' of your assignments change.</div>' + own.map(t => '<div class="detail">' + esc(projects[t.p].name) + ' · ' + esc(t.name) + '<small>' + span(plan.get(t.id).start, plan.get(t.id).end - 1) + ' → ' + span(slots.get(t.id).start, slots.get(t.id).end - 1) + '</small></div>').join('') + '<div class="actions"><button data-dismiss>Discard</button><button class="primary" id="apply">' + (requesting() && v.kind === 'leave' ? 'Send request' : 'Apply change') + '</button></div>');
     return;
   }
   const newTask = next.tasks.length > state.tasks.length ? next.tasks[next.tasks.length - 1] : null;
@@ -407,6 +418,12 @@ document.addEventListener('change', e => {
     if (mode === 'custom') { period = { ...period, mode }; render(); } else { setPeriod(mode, mode !== 'month' && inPeriod(anchorDay()) ? anchorDay() : middle); load(); }
   }
   if (id === 'pmCal') { pmCal = e.target.value; render(); }
+  if (id === 'accuracyBy') { accuracyBy = e.target.value; render(); }
+  if (id === 'teamPick') {
+    session.team = e.target.value;
+    try { sessionStorage.setItem('relay.team', session.team); } catch {}
+    booted = false; tab = 'home'; personFilter = 'all'; filter = 'all'; announce(''); load();
+  }
   if (id === 'pmProject') { pmProject = Number(e.target.value); announce(''); render(); }
 });
 // A click anywhere on a table row opens the item named in it (not while selecting text).
@@ -442,11 +459,20 @@ document.addEventListener('click', e => {
   if (b.dataset.leaveStart !== undefined) {
     const w = Number(b.dataset.leaveWho), l = state.leave.find(l => l.who === w && l.start === Number(b.dataset.leaveStart));
     const ids = 'data-who="' + w + '" data-from="' + l.start + '"';
-    modal('Time off', '<p class="note"><b>' + esc(who(w).name) + '</b><br>' + span(l.start, l.start + l.len - 1) + ' · ' + l.len / spd + ' workday' + (l.len === spd ? '' : 's') + '</p><p>Work is planned around this time. Moving or removing it reschedules the affected tasks.</p><div class="actions"><button data-release-leave ' + ids + '>Remove time off</button><button class="primary" data-edit-leave ' + ids + '>Reschedule</button></div>');
+    const ask = requesting();
+    modal('Time off', '<p class="note"><b>' + esc(who(w).name) + (l.reason ? ' · ' + esc(l.reason) : '') + '</b><br>' + leaveText(l) + '</p><p>Work is planned around this time. Moving or removing it reschedules the affected tasks' + (ask ? ', once the team manager approves.' : '.') + '</p><div class="actions"><button data-release-leave ' + ids + '>' + (ask ? 'Request removal' : 'Remove time off') + '</button><button class="primary" data-edit-leave ' + ids + '>' + (ask ? 'Request new dates' : 'Reschedule') + '</button></div>');
   }
-  if (b.hasAttribute('data-edit-leave')) { const l = state.leave.find(l => l.who === Number(b.dataset.who) && l.start === Number(b.dataset.from)); changeForm({ kind: 'leave', who: l.who, from: l.start, start: l.start, days: l.len / spd }); }
-  if (b.hasAttribute('data-release-leave')) send({ kind: 'releaseLeave', who: Number(b.dataset.who), start: Number(b.dataset.from) }, 'Time off removed.');
-  if (b.id === 'apply' && draft) send({ kind: 'draft', v: formValues, baseRev: state.rev });
+  if (b.hasAttribute('data-edit-leave')) { const l = state.leave.find(l => l.who === Number(b.dataset.who) && l.start === Number(b.dataset.from)); changeForm({ kind: 'leave', who: l.who, from: l.start, start: l.start, len: l.len, reason: l.reason ?? '' }); }
+  if (b.hasAttribute('data-release-leave')) {
+    const who = Number(b.dataset.who), from = Number(b.dataset.from);
+    requesting() ? send({ kind: 'requestLeave', v: { who, from, remove: true } }, 'Request sent. The team manager will approve or decline it.') : send({ kind: 'releaseLeave', who, start: from }, 'Time off removed.');
+  }
+  if (b.dataset.reviewRequest) reviewRequest(b.dataset.reviewRequest);
+  for (const k of ['approve', 'decline', 'cancel']) if (b.dataset[k + 'Request']) send({ kind: k + 'Request', id: b.dataset[k + 'Request'] }, { approve: 'Time off approved.', decline: 'Request declined.', cancel: 'Request cancelled.' }[k]);
+  if (b.id === 'undoLast') modal('Undo the last change?', '<p class="note">' + esc(undo) + '</p><p>The plan goes back to how it was before it. Anything already written to Jira (work logs, statuses, comments) stays as it is.</p><div class="actions"><button data-dismiss>Cancel</button><button class="primary" id="confirmUndo">Undo change</button></div>');
+  if (b.id === 'confirmUndo') runUndo();
+  if (b.id === 'rulesLink') modal('How planning works', rulesHtml(settings, timeInJira));
+  if (b.id === 'apply' && draft) requesting() && formValues.kind === 'leave' ? send({ kind: 'requestLeave', v: formValues }, 'Request sent. The team manager will approve or decline it.') : send({ kind: 'draft', v: formValues, baseRev: state.rev });
   if (b.id === 'confirmReset') { tab = 'home'; personFilter = 'all'; filter = 'all'; showAll = false; booted = false; send({ kind: 'reset' }, 'Sample plan restored.'); }
 });
 
@@ -510,31 +536,37 @@ document.addEventListener('click', event => {
   for (const op of ['estimate', 'finish', 'revise', 'pause', 'resume']) if (button.dataset[op]) changeForm({ kind: op, taskId: button.dataset[op] });
   if (button.dataset.start) send({ kind: 'start', taskId: button.dataset.start });
   if (button.dataset.timing && role === 'team') changeForm({ kind: 'timing', taskId: button.dataset.timing });
-  const id = button.dataset.private || button.dataset.editPrivate || button.dataset.releasePrivate;
+  const id = button.dataset.private || button.dataset.editPrivate || button.dataset.releasePrivate || button.dataset.releaseSeries;
   if (!id) return;
   const b = state.privateTime.find(block => block.id === id);
   const mine = role === 'team' || b.who === member;
-  if (button.dataset.private) modal('Private team time', '<p class="note"><b>' + esc(b.name) + '</b><br>' + esc(who(b.who).name) + ' · ' + span(b.start, b.start + b.len - 1) + '</p><p>This time belongs to the team. The PM sees project forecasts and customer coordination only.</p>' + (mine ? '<div class="actions"><button data-release-private="' + id + '">Release time</button><button class="primary" data-edit-private="' + id + '">Edit private block</button></div>' : ''));
+  if (button.dataset.private) modal('Private team time', '<p class="note"><b>' + esc(b.name) + '</b><br>' + esc(who(b.who).name) + ' · ' + span(b.start, b.start + b.len - 1) + '</p><p>This time belongs to the team. The PM sees project forecasts and customer coordination only.</p>' + (mine ? '<div class="actions">' + (b.series ? '<button data-release-series="' + id + '">Release this and later weeks</button>' : '') + '<button data-release-private="' + id + '">Release time</button><button class="primary" data-edit-private="' + id + '">Edit private block</button></div>' : ''));
   if (button.dataset.editPrivate) changeForm({ ...b, kind: 'private', blockId: id });
-  if (button.dataset.releasePrivate) send({ kind: 'releasePrivate', id });
+  if (button.dataset.releasePrivate) send({ kind: 'releasePrivate', id }, 'Private time released.');
+  if (button.dataset.releaseSeries) send({ kind: 'releasePrivate', id, later: true }, 'Private time released from ' + fmt(b.start) + ' on.');
 });
 
 function hours(minutes) { const whole = Math.floor(minutes / 60), part = minutes % 60; return part ? (whole ? whole + 'h ' : '') + part + 'm' : whole + 'h'; }
 function weekdayName(iso) { return new Date(iso + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }); }
 function logsInPeriod() { return state.logs.filter(e => inPeriod(e.date)); }
 function sumTime(entries) { return entries.reduce((n, e) => n + e.minutes, 0); }
-function tableBox(title, headers, rows, empty, id = '') {
-  return '<section class="panel"' + (id ? ' id="' + id + '"' : '') + '><div class="section-head"><h2>' + title + '</h2></div>' + (rows.length ? '<div class="scroll"><table class="data"><thead><tr>' + headers.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>' + rows.map(r => '<tr>' + r.map(v => '<td>' + v + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>' : '<p class="empty">' + empty + '</p>') + '</section>';
+function tableBox(title, headers, rows, empty, id = '', tools = '') {
+  return '<section class="panel"' + (id ? ' id="' + id + '"' : '') + '><div class="section-head"><h2>' + title + '</h2>' + tools + '</div>' + (rows.length ? '<div class="scroll"><table class="data"><thead><tr>' + headers.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>' + rows.map(r => '<tr>' + r.map(v => '<td>' + v + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>' : '<p class="empty">' + empty + '</p>') + '</section>';
 }
 /** Headline numbers: [label, value, tone ('bad' | 'warn' | ''), id of the section it jumps to]. */
-function metrics(items) { return '<div class="metrics">' + items.map(([label, value, tone = '', jump]) => (jump ? '<button data-jump="' + jump + '"' : '<div') + ' class="' + tone + '"><small>' + label + '</small><strong>' + value + '</strong>' + (jump ? '</button>' : '</div>')).join('') + '</div>'; }
+function metrics(items) { return '<div class="metrics" style="--n:' + items.length + '">' + items.map(([label, value, tone = '', jump]) => (jump ? '<button data-jump="' + jump + '"' : '<div') + ' class="' + tone + '"><small>' + label + '</small><strong>' + value + '</strong>' + (jump ? '</button>' : '</div>')).join('') + '</div>'; }
 /** Hours with a bar showing their share of the largest value in the table. */
 function hoursBar(minutes, max, p) { return '<span class="hbar" style="--w:' + (max ? Math.round(100 * minutes / max) : 0) + '%;' + (p == null ? '' : color(p)) + '"><span>' + hours(minutes) + '</span><i></i></span>'; }
+// Every entry is project work, internal work or time off taken (logged on the time-off issues).
+const isOff = e => e.absence != null, isProject = e => e.p != null, isInternal = e => e.p == null && !isOff(e);
+const offLabel = e => 'Time off' + (e.absence ? ' · ' + e.absence : '');
+/** Headline numbers for a list of entries; time off only when there is some or it is recorded. */
+const timeStats = (entries, total) => metrics([[total, hours(sumTime(entries))], ['Project work', hours(sumTime(entries.filter(isProject)))], ['Internal work', hours(sumTime(entries.filter(isInternal)))], ...(settings.general.absenceToJira || entries.some(isOff) ? [['Time off', hours(sumTime(entries.filter(isOff)))]] : [])]);
 function projectTotals(entries) {
   const sums = new Map();
-  for (const e of entries) sums.set(e.p, (sums.get(e.p) || 0) + e.minutes);
+  for (const e of entries) { const k = isOff(e) ? 'off' : e.p; sums.set(k, (sums.get(k) || 0) + e.minutes); }
   const max = Math.max(0, ...sums.values());
-  return [...sums].sort((a, b) => b[1] - a[1]).map(([p, n]) => [p == null ? 'Internal work' : esc(projects[p]?.name ?? 'Archived project'), hoursBar(n, max, p)]);
+  return [...sums].sort((a, b) => b[1] - a[1]).map(([p, n]) => [p === 'off' ? 'Time off' : p == null ? 'Internal work' : esc(projects[p]?.name ?? 'Archived project'), hoursBar(n, max, typeof p === 'number' ? p : null)]);
 }
 function memberHome() {
   const mine = state.tasks.filter(t => plan.get(t.id).who === member).sort((a, b) => a.rank - b.rank);
@@ -584,8 +616,9 @@ function managerHome() {
   const slotCell = k => { const [kind, p] = k.split(':'); return '<span class="load-cell ' + kind + (p != null ? ' proj" style="' + color(Number(p)) : '') + '" title="' + esc(label(k)) + '">' + esc(label(k)) + '</span>'; };
   const cell = day => day.every(k => k === day[0]) ? slotCell(day[0]) : '<span class="load-split">' + day.map(slotCell).join('') + '</span>';
   const capacity = '<section class="panel" id="capacity"><div class="section-head"><div><h2>Team capacity</h2><p>One cell per person per workday, split into ' + slotH + 'h slots when they differ.</p></div>' + periodPicker() + '</div><div class="scroll"><table class="data load-table"><thead><tr><th>Team member</th>' + Array.from({ length: nd }, (_, i) => '<th' + (d0 + i === todayDay() ? ' class="today"' : '') + '>' + fmt((d0 + i) * spd, { weekday: 'short', day: 'numeric' }) + '</th>').join('') + '</tr></thead><tbody>' + loads.map((slots, r) => '<tr><td>' + esc(team[r][0].name) + '</td>' + Array.from({ length: nd }, (_, d) => '<td>' + cell(slots.slice(d * spd, d * spd + spd)) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div></section>';
-  return metrics([['Open capacity', loads.flat().filter(k => k === 'free').length * slotH + 'h', '', 'capacity'], ['Tasks waiting now', waiting.length, waiting.length ? 'warn' : '', 'blockers'], ['Late milestone forecasts', late.length, late.length ? 'bad' : '', 'milestones']]) + capacity + tableBox('Blockers to review', ['Project', 'Task', 'Owner', 'Waiting for'], waiting.map(t => [esc(projects[t.p].name), '<button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button>', esc(who(t.wait.who).name), esc(t.wait.reason)]), 'No waiting tasks.', 'blockers') + (differs.length ? tableBox('Jira assignee differs from the plan', ['Task', 'Planned for', 'Jira assignee'], differs.map(([t, x]) => ['<button class="link" data-task="' + t.id + '">' + esc((t.key ? t.key + ' ' : '') + t.name) + '</button>', esc(who(x.who).name), esc(t.assignee.name)]), '') : '') + milestones() +
-    tableBox('Recent changes', ['When', 'Who', 'What'], (state.changes ?? []).slice(0, 8).map(c => [new Date(c.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }), esc(c.by), esc(c.what)]), 'No changes yet.');
+  const requests = state.leaveRequests ?? [];
+  return (requests.length ? tableBox('Time-off requests', ['Who', 'Asks to', 'When', 'Reason', ''], requests.map(r => [esc(who(r.who).name), r.remove ? 'Remove time off' : r.from != null ? 'Move time off' : 'Take time off', leaveText(r), esc(r.reason || '—'), '<button data-review-request="' + r.id + '">Review</button>']), '', 'requests') : '') + metrics([['Open capacity', loads.flat().filter(k => k === 'free').length * slotH + 'h', '', 'capacity'], ['Tasks waiting now', waiting.length, waiting.length ? 'warn' : '', 'blockers'], ['Late milestone forecasts', late.length, late.length ? 'bad' : '', 'milestones']]) + capacity + tableBox('Blockers to review', ['Project', 'Task', 'Owner', 'Waiting for'], waiting.map(t => [esc(projects[t.p].name), '<button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button>', esc(who(t.wait.who).name), esc(t.wait.reason)]), 'No waiting tasks.', 'blockers') + (differs.length ? tableBox('Jira assignee differs from the plan', ['Task', 'Planned for', 'Jira assignee'], differs.map(([t, x]) => ['<button class="link" data-task="' + t.id + '">' + esc((t.key ? t.key + ' ' : '') + t.name) + '</button>', esc(who(x.who).name), esc(t.assignee.name)]), '') : '') + milestones() +
+    tableBox('Recent changes', ['When', 'Who', 'What'], (state.changes ?? []).slice(0, 8).map(c => [new Date(c.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }), esc(c.by), esc(c.what)]), 'No changes yet.', 'changes', undo ? '<button id="undoLast" title="' + esc(undo) + '">↶ Undo last change</button>' : '');
 }
 /** Timesheet entries this role sees in the period. */
 function visibleEntries() {
@@ -598,7 +631,7 @@ function exportCsv() {
   const cell = v => '"' + String(v ?? '').replace(/^[=+\-@]/, "'$&").replace(/"/g, '""') + '"';
   const rows = [['Date', 'Person', 'Project', 'Work', 'Hours', 'Comment'], ...visibleEntries().sort((a, b) => a.date.localeCompare(b.date)).map(e => {
     const t = state.tasks.find(t => t.id === e.task);
-    return [e.date, people[e.who]?.name ?? '', e.p != null ? projects[e.p]?.name ?? '' : 'Internal work', t ? t.name : e.label ?? '', (e.minutes / 60).toFixed(2), e.note ?? ''];
+    return [e.date, people[e.who]?.name ?? '', isOff(e) ? 'Time off' : e.p != null ? projects[e.p]?.name ?? '' : 'Internal work', t ? t.name : isOff(e) ? e.absence || 'Time off' : e.label ?? '', (e.minutes / 60).toFixed(2), e.note ?? ''];
   })];
   const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([rows.map(r => r.map(cell).join(',')).join('\r\n')], { type: 'text/csv' })), download: 'timesheet-' + period.from + '_' + period.to + '.csv' });
   a.click();
@@ -606,9 +639,11 @@ function exportCsv() {
 }
 function timesheetView() {
   const entries = logsInPeriod().filter(e => e.who === member).sort((a, b) => a.date.localeCompare(b.date));
-  return '<div class="report-bar">' + periodPicker() + exportButton() + '</div>' + metrics([['Total recorded', hours(sumTime(entries))], ['Project work', hours(sumTime(entries.filter(e => e.p != null)))], ['Internal work', hours(sumTime(entries.filter(e => e.p == null)))]]) + tableBox('Time entries', ['Date', 'Work', 'Duration', timeInJira ? 'Comment' : 'Personal note', ''], entries.map(e => {
+  const pending = timeOffToRecord(entries);
+  const toRecord = pending.length ? tableBox('Time off to record', ['Date', 'Time off', 'Hours', ''], pending.map(x => [weekdayName(x.date), esc(x.reason || 'Time off'), hours(x.minutes), '<button data-record-off="' + esc(JSON.stringify(x)) + '">Record</button>']), '', 'toRecord', pending.length > 1 ? '<button class="primary" data-record-all>Record all</button>' : '') : '';
+  return '<div class="report-bar">' + periodPicker() + exportButton() + '</div>' + timeStats(entries, 'Total recorded') + toRecord + tableBox('Time entries', ['Date', 'Work', 'Duration', timeInJira ? 'Comment' : 'Personal note', ''], entries.map(e => {
     const t = state.tasks.find(t => t.id === e.task);
-    return [weekdayName(e.date), t ? esc(projects[t.p].name) + '<small class="meta-line">' + esc(t.name) + '</small>' : e.label ? esc(e.label) : 'Internal work', hours(e.minutes), esc(e.note || '—'), '<button data-entry="' + esc(e.id) + '">Edit</button>'];
+    return [weekdayName(e.date), t ? esc(projects[t.p].name) + '<small class="meta-line">' + esc(t.name) + '</small>' : isOff(e) ? esc(offLabel(e)) : e.label ? esc(e.label) : 'Internal work', hours(e.minutes), esc(e.note || '—'), '<button data-entry="' + esc(e.id) + '">Edit</button>'];
   }), timeInJira ? 'No time logged in Jira in this period. Use Log time to add a work log.' : 'No time recorded in this period. Use Log time to add an entry.');
 }
 const periodLength = () => Math.round((Date.parse(period.to) - Date.parse(period.from)) / DAY) + 1;
@@ -639,11 +674,24 @@ function reportView() {
     if (!p) return bar + '<p class="empty">No projects are assigned to you yet.</p>';
     return bar + metrics([['Project hours', hours(sumTime(entries))], ['Current milestone forecast', fmt(current)], ['Requested milestone', dueText(p)]]) + tableBox('Time by system', ['System', 'Recorded time'], bySystem, 'No project hours recorded in this period.') + tableBox('Project time by ' + (byDay() ? 'day' : 'week'), [byDay() ? 'Date' : 'Week', 'Logged project time'], dailyRows(entries), '') + '<button data-page="outlook">Open project outlook →</button>';
   }
-  const stats = metrics([['Recorded hours', hours(sumTime(entries))], ['Project work', hours(sumTime(entries.filter(e => e.p != null)))], ['Internal work', hours(sumTime(entries.filter(e => e.p == null)))]]);
+  const stats = timeStats(entries, 'Recorded hours');
   const groups = tableBox('Time by project', ['Project or category', 'Recorded time'], projectTotals(entries), 'No entries for this period.');
   if (personal) return bar + stats + groups + tableBox('Time by ' + (byDay() ? 'day' : 'week'), [byDay() ? 'Date' : 'Week', 'Recorded time'], dailyRows(entries), '');
   const perPerson = active(people).map(([p, i]) => [p, entries.filter(e => e.who === i)]), most = Math.max(0, ...perPerson.map(([, mine]) => sumTime(mine)));
-  return bar + stats + tableBox('Team time summary', ['Member', 'Project work', 'Internal work', 'Total'], perPerson.map(([p, mine]) => [esc(p.name), hours(sumTime(mine.filter(e => e.p != null))), hours(sumTime(mine.filter(e => e.p == null))), hoursBar(sumTime(mine), most)]), '') + groups + teamOverTime(entries);
+  const withOff = settings.general.absenceToJira || entries.some(isOff);
+  return bar + stats + tableBox('Team time summary', ['Member', 'Project work', 'Internal work', ...(withOff ? ['Time off'] : []), 'Total'], perPerson.map(([p, mine]) => [esc(p.name), hours(sumTime(mine.filter(isProject))), hours(sumTime(mine.filter(isInternal))), ...(withOff ? [hours(sumTime(mine.filter(isOff)))] : []), hoursBar(sumTime(mine), most)]), '') + groups + teamOverTime(entries) + accuracy();
+}
+/** Estimated against actual hours of tasks finished in Relay (the history window), grouped by type, system or person. */
+function accuracy() {
+  const done = state.completed.filter(c => c.est > 0), name = { type: c => types[c.type]?.name, system: c => systems[c.s], person: c => people[c.who]?.name }[accuracyBy];
+  const groups = new Map();
+  for (const c of done) { const k = name(c) ?? '—', g = groups.get(k) ?? { n: 0, est: 0, act: 0 }; g.n++; g.est += c.est; g.act += c.hours; groups.set(k, g); }
+  const rows = [...groups].sort((a, b) => b[1].n - a[1].n).map(([k, g]) => {
+    const diff = Math.round(100 * (g.act - g.est) / g.est);
+    return [esc(k), g.n, Math.round(g.est) + 'h', Math.round(g.act) + 'h', pill(Math.abs(diff) <= 10 ? 'On estimate' : diff > 0 ? diff + '% over' : -diff + '% under', diff > 10 ? 'late' : 'on-track')];
+  });
+  const tools = '<label class="sub">Group by <select id="accuracyBy">' + options([['type', 'Task type'], ['system', 'System'], ['person', 'Person']], accuracyBy) + '</select></label>';
+  return tableBox('Estimate accuracy', [{ type: 'Task type', system: 'System', person: 'Person' }[accuracyBy], 'Finished tasks', 'Estimated', 'Actual', 'Difference'], rows, 'No finished tasks to compare yet. Recording a finish compares the actual hours with the estimate.', 'accuracy', tools) + '<p class="sub">Tasks finished in Relay in the last ' + settings.general.historyMonths + ' months. Within 10% counts as on estimate.</p>';
 }
 /** Team report: each person's hours per day or week of the period, with totals. */
 function teamOverTime(entries) {
@@ -655,10 +703,11 @@ function teamOverTime(entries) {
 }
 function logForm(existing, taskId) {
   if (role !== 'member' || (existing && existing.who !== member)) return;
-  const e = existing ?? { task: taskId || '', date: inPeriod(today) ? today : period.from, minutes: 60, note: '' };
-  const internal = settings.general.internalIssue;
+  const e = existing ? { ...existing, task: isOff(existing) ? 'absence:' + existing.absence : existing.task } : { task: taskId || '', date: inPeriod(today) ? today : period.from, minutes: 60, note: '' };
+  const internal = settings.general.internalIssue, g = settings.general;
   const choices = [
     ...(!timeInJira ? [['', 'Internal work']] : internal ? [['', 'Internal work (' + internal + ')']] : []),
+    ...(g.absenceToJira ? ['', ...LEAVE_REASONS].filter(r => !timeInJira || absenceIssue(g, r)).map(r => ['absence:' + r, 'Time off · ' + (r || 'no reason') + (timeInJira ? ' (' + absenceIssue(g, r) + ')' : '')]) : []),
     ...state.tasks.filter(t => (!timeInJira || t.key) && (t.actual == null || t.id === e.task)).map(t => [t.id, projects[t.p].name + ' / ' + (t.key ? t.key + ' ' : '') + t.name])
   ];
   if (!choices.length) return modal('Log time', '<p>Time is logged on Jira issues, and none are planned for you yet. Ask the team manager to refresh from Jira.</p><div class="actions"><button data-dismiss>Close</button></div>');
@@ -676,7 +725,7 @@ document.addEventListener('submit', async event => {
   if (minutes <= 0) { $('logError').textContent = 'Enter a positive duration.'; return; }
   const old = state.logs.find(x => x.id === event.target.dataset.id);
   // Demo entries get their id here so a retry overwrites; Jira assigns work log ids itself.
-  const entry = { id: old?.id ?? (timeInJira ? undefined : crypto.randomUUID()), issue: old?.issue, prevTask: old ? old.task ?? '' : undefined, prevDate: old?.date, task: data.get('entryTask') || '', date: dateValue, minutes, note: data.get('note') };
+  const entry = { id: old?.id ?? (timeInJira ? undefined : crypto.randomUUID()), issue: old?.issue, prevTask: old ? (isOff(old) ? 'absence:' + old.absence : old.task ?? '') : undefined, prevDate: old?.date, task: data.get('entryTask') || '', date: dateValue, minutes, note: data.get('note') };
   const ok = await send({ kind: 'log', entry }, (timeInJira ? 'Logged in Jira · ' : 'Time saved · ') + hours(minutes) + ' on ' + weekdayName(dateValue) + '.');
   if (ok) { if (!inPeriod(dateValue)) setPeriod(period.mode === 'custom' ? 'week' : period.mode, dateValue); load(); }
 });
@@ -687,10 +736,86 @@ document.addEventListener('click', event => {
   if (b.hasAttribute('data-export')) exportCsv();
   if (b.dataset.push) pushToJira(b.dataset.pushTask, b.dataset.push);
   if (role !== 'member') return;
+  if (b.dataset.recordOff) recordTimeOff([JSON.parse(b.dataset.recordOff)]);
+  if (b.hasAttribute('data-record-all')) recordTimeOff(timeOffToRecord(logsInPeriod().filter(e => e.who === member)));
   if (b.dataset.logTask) logForm(null, b.dataset.logTask);
   if (b.dataset.entry) logForm(state.logs.find(e => e.id === b.dataset.entry));
   if (b.dataset.removeLog) modal('Delete time entry?', '<p>This removes the recorded hours from your timesheet and the reports.</p><div class="actions"><button data-dismiss>Cancel</button><button class="primary" data-delete-log="' + esc(b.dataset.removeLog) + '">Delete entry</button></div>');
   if (b.dataset.deleteLog) { const old = state.logs.find(x => x.id === b.dataset.deleteLog); send({ kind: 'deleteLog', id: old?.id, issue: old?.issue, date: old?.date }, 'Time entry deleted.'); }
+});
+
+/** Days of the member's time off up to today, in the period, with no time-off entry yet: { date, minutes, reason }. */
+function timeOffToRecord(entries) {
+  if (!settings.general.absenceToJira) return [];
+  const out = [], perDay = people[member]?.hoursPerDay ?? settings.general.workdayHours;
+  for (const l of state.leave.filter(l => l.who === member)) {
+    const days = new Map(); // workday → slots away that the person works
+    for (let s = l.start; s < l.start + l.len; s++) if (!off(member, s)) days.set(Math.floor(s / spd), (days.get(Math.floor(s / spd)) ?? 0) + 1);
+    for (const [d, n] of days) {
+      const date = M.cal.isoOfDay(d);
+      if (inPeriod(date) && date <= today && !entries.some(e => e.date === date && isOff(e))) out.push({ date, minutes: Math.min(n * slotH, perDay) * 60, reason: l.reason ?? '' });
+    }
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+/** Log each day of time off as the member's own entry (a Jira work log on its time-off issue in live mode). */
+async function recordTimeOff(list) {
+  let done = 0;
+  for (const x of list) {
+    if (!(await send({ kind: 'log', entry: { id: timeInJira ? undefined : crypto.randomUUID(), task: 'absence:' + x.reason, date: x.date, minutes: x.minutes, note: '' } }, ''))) break;
+    done++;
+  }
+  await load();
+  if (done) announce('Recorded ' + done + ' day' + (done === 1 ? '' : 's') + ' of time off' + (timeInJira ? ' in Jira.' : '.'));
+}
+
+/** Members asking for time off: it counts only after the team manager approves. */
+const requesting = () => role === 'member' && leaveMode(settings.general) === 'request';
+/** A member's pending time-off requests, above their calendar. */
+function myRequests() {
+  const mine = role === 'member' ? (state.leaveRequests ?? []).filter(r => r.who === member) : [];
+  return mine.length ? '<div class="requests">' + mine.map(r => '<div class="detail request-row"><div><b>' + (r.remove ? 'Remove time off' : r.from != null ? 'Move time off' : esc(r.reason || 'Time off')) + ' · ' + leaveText(r) + '</b><small>Request waiting for the team manager</small></div><button data-cancel-request="' + r.id + '">Cancel request</button></div>').join('') + '</div>' : '';
+}
+/** Team manager: what approving a time-off request would move, then approve or decline. */
+function reviewRequest(id) {
+  const r = state.leaveRequests.find(x => x.id === id);
+  if (!r) return;
+  let impact = 'Approving frees this time for planning.';
+  if (!r.remove) {
+    try { const n = M.makeDraft(state, plan, { kind: 'leave', who: r.who, start: r.start, len: r.len, reason: r.reason, from: r.from }).moved.length; impact = n + (n === 1 ? ' assignment moves' : ' assignments move') + ' if you approve.'; }
+    catch (e) { impact = 'This request can no longer be approved: ' + e.message; }
+  }
+  modal('Time-off request', '<p class="note"><b>' + esc(who(r.who).name) + ' · ' + (r.remove ? 'Remove time off' : r.from != null ? 'Move time off' : esc(r.reason || 'Time off')) + '</b><br>' + leaveText(r) + (r.from != null && !r.remove ? '<br><small>Currently from ' + fmt(r.from) + '</small>' : '') + '</p><p>' + esc(impact) + '</p><div class="actions"><button data-dismiss>Later</button><button data-decline-request="' + r.id + '">Decline</button><button class="primary" data-approve-request="' + r.id + '">Approve</button></div>');
+}
+async function runUndo() {
+  if (busy) return;
+  busy = true;
+  try { useWorkspace(await call('undo', { demo: demoCtx(), range: periodRange() })); $('modal').close(); render(); announce('Change undone.'); }
+  catch (e) { if (e.code === 'stale') await load(); modal('Nothing was undone', '<p>' + esc(e.message) + '</p><div class="actions"><button data-dismiss>Close</button></div>'); }
+  finally { busy = false; }
+}
+// Drag and drop on the team calendar: dropping a task on a day in someone's row previews a fixed start there.
+document.addEventListener('dragstart', e => {
+  const id = e.target.closest?.('[data-drag]')?.dataset.drag;
+  if (id) { e.dataTransfer.setData('text/plain', id); e.dataTransfer.effectAllowed = 'move'; }
+});
+const clearDrop = () => document.querySelectorAll('.drop-here').forEach(x => x.classList.remove('drop-here'));
+document.addEventListener('dragover', e => {
+  const lane = role === 'team' && e.target.closest?.('.lane[data-who]');
+  if (!lane) return;
+  e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+  if (!lane.classList.contains('drop-here')) { clearDrop(); lane.classList.add('drop-here'); }
+});
+document.addEventListener('dragend', clearDrop);
+document.addEventListener('drop', e => {
+  const lane = e.target.closest?.('.lane[data-who]'), id = e.dataTransfer.getData('text/plain');
+  clearDrop();
+  if (role !== 'team' || !lane || !state.tasks.some(t => t.id === id)) return;
+  e.preventDefault();
+  const r = lane.getBoundingClientRect(), slot = Number(lane.dataset.start) + Math.floor((e.clientX - r.left) / r.width * Number(lane.dataset.cols)), day = Math.floor(slot / spd);
+  if (day * spd + spd <= M.now) return announce('Drop the task on today or a later day.');
+  try { preview({ kind: 'timing', taskId: id, stamp: M.cal.isoOfDay(day), prefer: lane.dataset.who }); }
+  catch (err) { modal('Task not moved', '<p>' + esc(err.message) + '</p><div class="actions"><button data-dismiss>Close</button></div>'); }
 });
 
 load();

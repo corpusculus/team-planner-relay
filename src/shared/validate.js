@@ -1,5 +1,5 @@
 // Validates and rebuilds settings from untrusted input. Unknown fields are dropped.
-import { UserError } from './model.js';
+import { UserError, leaveMode, LEAVE_REASONS } from './model.js';
 
 const fail = msg => { throw new UserError(msg); };
 const str = (v, max, label, required = true) => {
@@ -24,6 +24,10 @@ const isoDate = (v, label) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(v))) fail(label + ' must be a date.');
   return v;
 };
+const issueKey = (v, label) => {
+  const k = String(v ?? '').trim().toUpperCase();
+  return /^([A-Z][A-Z0-9_]*-\d+)?$/.test(k) ? k : fail(label + ' must be an issue key like ADMIN-12.');
+};
 const arr = (v, max, label) => {
   if (!Array.isArray(v)) fail(label + ' must be a list.');
   if (v.length > max) fail('At most ' + max + ' ' + label.toLowerCase() + ' are supported.');
@@ -47,8 +51,14 @@ export function validateSettings(input, prev) {
     minSamples: num(gi.minSamples, 1, 50, 'Minimum history samples', true),
     historyMonths: num(gi.historyMonths, 1, 60, 'History window', true),
     blockLinkType: str(gi.blockLinkType ?? 'Blocks', 60, 'Dependency link type'),
-    memberLeave: !!gi.memberLeave, // members may add, move and remove their own time off
-    internalIssue: /^([A-Z][A-Z0-9_]*-\d+)?$/.test(String(gi.internalIssue ?? '').trim().toUpperCase()) ? String(gi.internalIssue ?? '').trim().toUpperCase() : fail('Internal work issue must be an issue key like ADMIN-12.'),
+    memberLeave: leaveMode(gi), // who changes a member's time off: 'off', 'request' or 'free'
+    startStatus: str(gi.startStatus, 60, 'Status when work starts', false), // Jira status names; empty = leave the status alone
+    doneStatus: str(gi.doneStatus, 60, 'Status when work finishes', false),
+    notifyChanges: !!gi.notifyChanges, // comment on Jira issues whose planned owner or finish changes
+    internalIssue: issueKey(gi.internalIssue, 'Internal work issue'),
+    // Time off taken is logged as work on these issues, by reason ('none' = no reason given, and the fallback).
+    absenceToJira: !!gi.absenceToJira,
+    absenceIssues: Object.fromEntries(['none', ...LEAVE_REASONS].map(r => [r, issueKey(gi.absenceIssues?.[r], 'Time off issue for ' + (r === 'none' ? 'no reason' : r))]).filter(([, k]) => k)),
     storyPointsField: /^[a-zA-Z0-9_]{0,40}$/.test(gi.storyPointsField ?? '') ? (gi.storyPointsField ?? '') : fail('Story points field must look like customfield_10016.')
   };
   const systems = arr(s.systems, 50, 'Systems').map((x, i) => str(x, 40, 'System ' + (i + 1)));

@@ -13,6 +13,13 @@ modules:
       resource: settings
       resolver:
         function: resolver
+  jira:issueContext:
+    - key: relay-issue-plan
+      title: Team plan
+      label: Team plan
+      resource: issue
+      resolver:
+        function: resolver
   scheduledTrigger:
     - key: relay-auto-refresh
       function: auto-refresh
@@ -27,6 +34,8 @@ resources:
     path: dist/planner
   - key: settings
     path: dist/settings
+  - key: issue
+    path: dist/issue
   - key: icons
     path: static/icons
 permissions:

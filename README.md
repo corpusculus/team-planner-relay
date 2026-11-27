@@ -28,11 +28,11 @@ In Jira: Apps → **Team Planner Relay**. Admins: Jira settings → Apps → **T
 
 | Path | Role |
 |---|---|
-| `manifest.yml` | Jira global page (planner) + admin page (settings), read-only Jira scopes, app storage |
+| `manifest.yml` | Jira global page (planner), admin page (settings), issue panel (Team plan), Jira scopes, app storage |
 | `src/index.js` | Forge resolver: KVS storage, Jira REST as the signed-in user |
 | `src/service.js` | Backend logic: roles, redaction, revision checks, Jira refresh, settings |
 | `src/shared/` | Scheduler (`model.js`), estimator, Jira mapping, settings validation, demo data; used by UI and backend |
-| `static/planner`, `static/settings` | Vanilla JS UI, built with Vite into `dist/` |
+| `static/planner`, `static/settings`, `static/issue` | Vanilla JS UI, built with Vite into `dist/` |
 
 Estimation: Jira estimate or story points if the task type says so; otherwise P70 of the actual hours of ≥3 similar finished tasks
 (same project+system → same system → same type), buffer up to P90; otherwise type default × system size × complexity factors.
@@ -50,8 +50,9 @@ MIT, free of charge. See [LICENSE](LICENSE).
 ## Known limits (v1)
 
 - Time is logged only in Jira (work logs). Reading a week costs one Jira request per issue with time logged that week.
-- Writes back to Jira only on request: work logs, assignee, due date. No status transitions.
+- Writes to Jira: work logs (optionally also time off taken, on chosen issues), and on request assignee and due date. Optional (settings): status on start and finish, and comments when an issue's owner or finish changes (at most 20 per change).
 - Automatic refresh every 5 minutes when Jira changed (and at least hourly) uses the app's own Jira access; manual refresh uses the team manager's.
 - Monday–Friday workweek, with public holidays and per-person working days and hours.
 - People, projects, systems and task types are archived, not deleted (the plan refers to them by position).
-- The plan lives in one storage key (~240 KB); saves from the same revision are guarded so only one wins.
+- The plan lives in one storage key per team (~240 KB); saves from the same revision are guarded so only one wins. Undo goes back one change.
+- Teams are added and renamed, not deleted. The first team keeps the original storage keys.

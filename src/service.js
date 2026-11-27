@@ -1,12 +1,13 @@
 // Relay backend logic. Storage and Jira are injected so the same code runs in Forge and in the local preview.
 // Storage keys: 'settings', 'plan' (tasks and planning records), 'plan-rev:N' (short-lived save claims),
-// 'logs:YYYY-MM' (demo timesheets only — in live mode time is logged as Jira work logs).
-import { createModel, normalize, emptyState, applyLogOp, UserError, DAY_MS } from './shared/model.js';
+// 'logs:YYYY-MM' (demo timesheets only — in live mode time is logged as Jira work logs), 'plan-undo' (the plan before the last change).
+// Several teams: 'teams' lists them; the first team uses the keys above, team tN the same keys prefixed 'tN:'.
+import { createModel, normalize, emptyState, applyLogOp, leaveMode, absenceOf, absenceIssue, LEAVE_REASONS, UserError, DAY_MS } from './shared/model.js';
 import { sampleSettings, sampleState, liveSettings } from './shared/defaults.js';
 import { validateSettings } from './shared/validate.js';
 import { mapIssues, historyFromIssues, mergeTasks, issueFields } from './shared/jira-map.js';
 
-const MEMBER_OPS = new Set(['start', 'log', 'deleteLog', 'releasePrivate', 'releaseLeave', 'draft']);
+const MEMBER_OPS = new Set(['start', 'log', 'deleteLog', 'releasePrivate', 'releaseLeave', 'requestLeave', 'cancelRequest', 'draft']);
 const MEMBER_DRAFTS = new Set(['private', 'leave', 'pause', 'resume', 'estimate', 'finish', 'revise']);
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const monthOf = iso => String(iso).slice(0, 7);
@@ -33,7 +34,7 @@ const hideTask = (t, name) => ({ ...t, name, key: undefined, labels: [], source:
 
 const logChange = (plan, by, what) => { plan.changes = [{ at: new Date().toISOString(), by, what }, ...(plan.changes ?? [])].slice(0, 100); };
 
-export function createService({ store, jira, today = utcToday }) {
+function createTeamService({ store, jira, today }) {
   // ---- demo timesheets (Relay storage) ----
   const readLogs = async months => (await Promise.all(months.map(m => store.get('logs:' + m)))).flatMap(list => list ?? []);
   /** Replace the given months (and any month the entries fall in) with these entries, and remember the months. */
@@ -89,22 +90,27 @@ export function createService({ store, jira, today = utcToday }) {
   /** Work logged in Jira by team members in the range, on connected projects and the internal-work issue. */
   async function jiraWorklogs(settings, state, range) {
     const keys = settings.projects.filter(p => p.jiraKey && !p.archived).map(p => '"' + p.jiraKey + '"'), internal = settings.general.internalIssue;
-    if (!keys.length && !internal) return [];
-    const scope = [keys.length && 'project in (' + keys.join(',') + ')', internal && 'key = "' + internal + '"'].filter(Boolean).join(' OR ');
+    // Time-off issues, by key: the first reason that uses each key names it.
+    const absence = new Map();
+    for (const r of ['', ...LEAVE_REASONS]) { const k = absenceIssue(settings.general, r); if (k && !absence.has(k)) absence.set(k, r); }
+    const single = [internal, ...absence.keys()].filter(Boolean).map(k => '"' + k + '"');
+    if (!keys.length && !single.length) return [];
+    const scope = [keys.length && 'project in (' + keys.join(',') + ')', single.length && 'key in (' + single.join(',') + ')'].filter(Boolean).join(' OR ');
     const issues = await searchAll('(' + scope + ') AND worklogDate >= "' + range.from + '" AND worklogDate <= "' + range.to + '"', ['project', 'summary'], 500);
     const project = new Map(settings.projects.map((p, i) => [p.jiraKey, i])), person = new Map(settings.people.map((p, i) => [p.accountId, i]));
     const tasks = new Set(state.tasks.map(t => t.id)), after = Date.parse(range.from) - DAY_MS, before = Date.parse(range.to) + 2 * DAY_MS, out = [];
     // shortcut: one request per issue with time in the range, 8 at a time; fine for one team, use /worklog/updated for large sites.
     for (let i = 0; i < issues.length; i += 8) await Promise.all(issues.slice(i, i + 8).map(async issue => {
-      const isInternal = issue.key === internal;
+      const isInternal = issue.key === internal, off = absence.has(issue.key) && !isInternal ? absence.get(issue.key) : null;
       for (const w of await jira.worklogs(issue.id, after, before)) {
         const who = person.get(w.author?.accountId), date = String(w.started).slice(0, 10);
         if (who === undefined || date < range.from || date > range.to) continue;
         out.push({
           id: String(w.id), issue: String(issue.id), who, date, minutes: Math.round(w.timeSpentSeconds / 60), note: adfText(w.comment).trim(),
-          task: !isInternal && tasks.has('jira-' + issue.id) ? 'jira-' + issue.id : null,
-          p: isInternal ? null : project.get(issue.fields?.project?.key) ?? null,
-          label: isInternal ? 'Internal work' : issue.key + ' · ' + (issue.fields?.summary ?? '')
+          task: !isInternal && off == null && tasks.has('jira-' + issue.id) ? 'jira-' + issue.id : null,
+          p: isInternal || off != null ? null : project.get(issue.fields?.project?.key) ?? null,
+          label: isInternal ? 'Internal work' : off != null ? 'Time off' + (off ? ' · ' + off : '') : issue.key + ' · ' + (issue.fields?.summary ?? ''),
+          ...(off != null ? { absence: off } : {})
         });
       }
     }));
@@ -121,9 +127,9 @@ export function createService({ store, jira, today = utcToday }) {
     const e = op.entry ?? {}, minutes = Number(e.minutes), date = String(e.date ?? ''), note = String(e.note ?? '').trim().slice(0, 400);
     if (!ISO.test(date)) throw new UserError('Choose a date.');
     if (!Number.isInteger(minutes) || minutes <= 0 || minutes > 1440) throw new UserError('Enter a duration of up to 24 hours.');
-    const task = e.task ? state.tasks.find(t => t.id === e.task && t.key) : null;
-    const issue = e.task ? task?.key : settings.general.internalIssue;
-    if (!issue) throw new UserError(e.task ? 'Time can only be logged on Jira issues.' : 'Ask an admin to set an internal-work issue in Relay settings.');
+    const absence = absenceOf(e.task), task = e.task && absence == null ? state.tasks.find(t => t.id === e.task && t.key) : null;
+    const issue = absence != null ? absenceIssue(settings.general, absence) : e.task ? task?.key : settings.general.internalIssue;
+    if (!issue) throw new UserError(absence != null ? 'Ask an admin to set the Jira issues for time off in Relay settings.' : e.task ? 'Time can only be logged on Jira issues.' : 'Ask an admin to set an internal-work issue in Relay settings.');
     // Noon UTC keeps the work log on the chosen day in every time zone a team is likely to be in.
     const body = { timeSpentSeconds: minutes * 60, started: date + 'T12:00:00.000+0000', ...(note ? { comment: adf(note) } : {}) };
     const sameIssue = String(e.task ?? '') === String(e.prevTask ?? '');
@@ -154,6 +160,9 @@ export function createService({ store, jira, today = utcToday }) {
     s.privateTime = s.privateTime.map(b => (me.access === 'member' && b.who === me.person ? b : { ...b, name: 'Private time' }));
     if (me.access === 'team') s.logs = s.logs.map(e => ({ ...e, note: '' }));
     if (me.access !== 'team') s.changes = [];
+    // Why someone is away (sick leave, say) is for the team manager and the person only.
+    s.leave = s.leave.map(l => (me.access === 'team' || l.who === me.person ? l : { ...l, reason: '' }));
+    if (me.access !== 'team') s.leaveRequests = me.access === 'member' ? s.leaveRequests.filter(r => r.who === me.person) : [];
     if (me.access === 'member') {
       const plan = model.schedule(state);
       const mine = t => plan.get(t.id)?.who === me.person || t.wait?.who === me.person || t.history?.some(h => h.who === me.person);
@@ -194,7 +203,8 @@ export function createService({ store, jira, today = utcToday }) {
     if (!me) return { notMember: true, isAdmin: await ctx.isAdmin() };
     const period = rangeFor(range, ctx.today);
     state.logs = await timesheets(settings, state, period);
-    return { settings, state: await redact(state, me, createModel(settings, ctx.today)), me, today: ctx.today, range: period, timeInJira: liveTime(settings) };
+    const undo = me.access === 'team' ? await store.get('plan-undo') : null;
+    return { settings, state: await redact(state, me, createModel(settings, ctx.today)), me, today: ctx.today, range: period, timeInJira: liveTime(settings), undo: undo?.rev === state.rev ? undo.what : null };
   }
 
   function authorize(me, op, model, state, settings) {
@@ -210,8 +220,17 @@ export function createService({ store, jira, today = utcToday }) {
       if (Number(op.v.who) !== me.person || (block && block.who !== me.person)) throw new UserError('You can only protect your own time.');
       return;
     }
+    if (op.kind === 'requestLeave') {
+      if (leaveMode(settings.general) !== 'request') throw new UserError('Ask the team manager to make this change.');
+      if (Number(op.v?.who) !== me.person) throw new UserError('You can only change your own time off.');
+      return;
+    }
+    if (op.kind === 'cancelRequest') {
+      if (state.leaveRequests.find(r => r.id === op.id)?.who !== me.person) throw new UserError('You can only cancel your own requests.');
+      return;
+    }
     if (op.kind === 'releaseLeave' || (op.kind === 'draft' && op.v.kind === 'leave')) {
-      if (!settings.general.memberLeave) throw new UserError('Ask the team manager to make this change.');
+      if (leaveMode(settings.general) !== 'free') throw new UserError('Ask the team manager to make this change.');
       if (Number(op.kind === 'draft' ? op.v.who : op.who) !== me.person) throw new UserError('You can only change your own time off.');
       return;
     }
@@ -265,7 +284,7 @@ export function createService({ store, jira, today = utcToday }) {
       }
 
       if (opId && state.ops.includes(opId)) return workspace(ctx, demo, range); // retried request: already applied
-      let next;
+      let next, summary;
       if (op.kind === 'reset') {
         if (!settings.demo) throw new UserError('Only the demo plan can be reset.');
         await writeLogs(state, [], state.logMonths);
@@ -274,13 +293,44 @@ export function createService({ store, jira, today = utcToday }) {
       } else {
         // Previews are calculated against a revision; refuse to apply one that is out of date.
         if (op.kind === 'draft' && op.baseRev !== state.rev) throw new UserError('Someone else changed the plan. Review the change again.', 'stale');
-        const result = model.applyOp(state, op, me);
-        next = result.next;
-        logChange(next, me.name, result.summary);
+        ({ next, summary } = model.applyOp(state, op, me));
+        logChange(next, me.name, summary);
       }
       next.ops = [...state.ops, opId].filter(Boolean).slice(-50);
       await savePlan(next, settings, ctx.today, state.rev);
+      if (op.kind === 'reset') return workspace(ctx, demo, range);
+      // Written after the save, so it always belongs to the revision that was saved.
+      const { changes, ops, logs, ...before } = state;
+      await store.set('plan-undo', { rev: state.rev + 1, what: summary, plan: before }).catch(e => console.error('plan-undo', e));
+      const warning = await jiraFollowUp(settings, state, next, op, model);
+      return { ...(await workspace(ctx, demo, range)), ...(warning ? { warning } : {}) };
+    },
+
+    /** Team manager: put the plan back as it was before the last change. Anything already written to Jira stays. */
+    async undo(ctx, { demo, range }) {
+      const { settings, state } = await load(ctx.today);
+      const me = identify(settings, ctx.accountId, demo);
+      if (me?.access !== 'team') throw new UserError('Only the team manager can undo changes.');
+      const u = await store.get('plan-undo');
+      if (u?.rev !== state.rev) throw new UserError('Only the most recent change can be undone, and the plan has changed since. Reload to see it.', 'stale');
+      const next = { ...u.plan, changes: state.changes, ops: state.ops, logMonths: state.logMonths, refreshedAt: state.refreshedAt };
+      createModel(settings, ctx.today).schedule(normalize(next, settings));
+      logChange(next, me.name, 'Undid: ' + u.what);
+      await savePlan(next, settings, ctx.today, state.rev);
       return workspace(ctx, demo, range);
+    },
+
+    /** Issue panel in Jira: how this issue is planned. Anyone who can open the issue sees it; private details stay out. */
+    async issuePlan(ctx) {
+      const { settings, state } = await load(ctx.today);
+      const t = !settings.demo && state.tasks.find(t => t.id === 'jira-' + ctx.issueId);
+      if (!t) return { planned: false };
+      const M = createModel(settings, ctx.today), plan = M.schedule(state), x = plan.get(t.id), p = M.projects[t.p];
+      return {
+        planned: true, status: M.statusOf(t), owner: M.who(x.who).name, window: M.span(x.start, x.end - 1),
+        work: M.hrs(M.effectiveWork(t)), buffer: M.hrs(M.duration(t) - M.effectiveWork(t)), waiting: t.wait ? (t.wait.shared ? t.wait.reason : 'Waiting') : '',
+        project: p?.name ?? '', projectForecast: M.fmt(M.finish(state, plan, t.p)), due: p ? M.dueText(p) : ''
+      };
     },
 
     /** Team manager: set the Jira assignee to the planned owner, or the Jira due date to the forecast finish. */
@@ -326,6 +376,7 @@ export function createService({ store, jira, today = utcToday }) {
         const next = { ...(settings.demo ? sampleState(settings) : emptyState(settings)), logMonths: state.logMonths };
         logChange(next, 'Admin', settings.demo ? 'Switched to demo data' : 'Switched to live Jira data');
         await savePlan(next, settings, ctx.today, state.rev);
+        await store.set('plan-undo', {});
         return api.getSettings(ctx);
       }
       const settings = validateSettings({ ...input, demo: prev.demo }, prev);
@@ -347,10 +398,11 @@ export function createService({ store, jira, today = utcToday }) {
       const { settings, state } = await load(ctx.today), i = Number(index);
       if (!settings.people[i]) throw new UserError('Choose a person.');
       settings.people[i] = { name: 'Former member ' + (i + 1), role: '', access: 'member', skills: [], accountId: null, pmProjects: [], archived: true, days: [0, 1, 2, 3, 4], hoursPerDay: settings.general.workdayHours };
-      const next = { ...state, privateTime: state.privateTime.filter(b => b.who !== i), leave: state.leave.filter(l => l.who !== i) };
+      const next = { ...state, privateTime: state.privateTime.filter(b => b.who !== i), leave: state.leave.filter(l => l.who !== i), leaveRequests: state.leaveRequests.filter(r => r.who !== i) };
       logChange(next, 'Admin', 'Removed the personal data of former member ' + (i + 1));
       await store.set('settings', settings);
       await savePlan(next, settings, ctx.today, state.rev);
+      await store.set('plan-undo', {}); // the copy kept for undo still holds their absences
       return api.getSettings(ctx);
     },
 
@@ -434,16 +486,130 @@ export function createService({ store, jira, today = utcToday }) {
     return { refreshed: true };
   }
 
+  /** After a change in live mode: move the Jira status on start and finish, and tell owners whose plan changed. Returns a warning or ''. */
+  async function jiraFollowUp(settings, before, after, op, model) {
+    if (!liveTime(settings)) return '';
+    const g = settings.general, notes = [];
+    const id = op.kind === 'start' ? op.taskId : op.kind === 'draft' && op.v?.kind === 'finish' ? op.v.taskId : null;
+    const t = id && after.tasks.find(t => t.id === id && t.key), target = op.kind === 'start' ? g.startStatus : g.doneStatus;
+    if (t && target) notes.push(await moveStatus(t.key, target));
+    if (g.notifyChanges) notes.push(await notifyOwners(settings, before, after, model));
+    return notes.filter(Boolean).join(' ');
+  }
+
+  async function moveStatus(key, name) {
+    const same = x => String(x ?? '').toLowerCase() === name.toLowerCase();
+    try {
+      if (same(await jira.status(key))) return '';
+      const to = (await jira.transitions(key)).find(x => same(x.to?.name) || same(x.name));
+      if (!to) return key + ' stays in its Jira status: its workflow has no step to “' + name + '” from there.';
+      await jira.transition(key, to.id);
+      return '';
+    } catch (e) {
+      return key + ' was not moved to “' + name + '” in Jira. ' + (e instanceof UserError ? e.message : '');
+    }
+  }
+
+  /** A Jira comment, mentioning the people concerned, on each issue that changed owner or now finishes on a later day. */
+  async function notifyOwners(settings, before, after, model) {
+    const a = model.schedule(before), b = model.schedule(after), day = x => Math.floor((x - 1) / model.spd);
+    const changed = after.tasks.map(t => [t, a.get(t.id), b.get(t.id)])
+      .filter(([t, x, y]) => t.key && t.actual == null && x && Number.isFinite(y.end) && (x.who !== y.who || (Number.isFinite(x.end) && day(y.end) > day(x.end))));
+    let failed = 0;
+    // shortcut: at most 20 comments per change, one at a time; a change that moves more tasks only comments on the first 20.
+    for (const [t, x, y] of changed.slice(0, 20)) {
+      const moved = x.who !== y.who;
+      const text = 'Team plan update: ' + (moved ? 'now planned for ' + model.who(y.who).name + ' (was ' + model.who(x.who).name + '), ' + model.span(y.start, y.end - 1) : 'forecast finish moved from ' + model.fmt(x.end - 1) + ' to ' + model.fmt(y.end - 1)) + '.';
+      const ids = [...new Set([settings.people[y.who]?.accountId, moved ? settings.people[x.who]?.accountId : null].filter(Boolean))];
+      const body = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [...ids.flatMap(id => [{ type: 'mention', attrs: { id } }, { type: 'text', text: ' ' }]), { type: 'text', text }] }] };
+      try { await jira.addComment(t.key, body); } catch (e) { failed++; console.error('comment', t.key, e); }
+    }
+    return failed ? failed + ' Jira comment' + (failed === 1 ? '' : 's') + ' about the plan change could not be added.' : '';
+  }
+
+  /** Whether this account can open this team's planner: 'demo', 'member' or null. */
+  async function memberOf(accountId) {
+    const settings = (await store.get('settings')) ?? sampleSettings();
+    return settings.demo ? 'demo' : settings.people.some(p => p.accountId === accountId && !p.archived) ? 'member' : null;
+  }
+
   /** Single entry point: expected problems become { error }, anything else is logged and hidden. */
   async function handle(name, ctx, payload) {
     if (!Object.hasOwn(api, name)) return { error: 'Unknown request.' };
-    try {
-      return await api[name]({ ...ctx, today: pickDay(payload?.today, today()) }, payload ?? {});
-    } catch (e) {
-      if (e instanceof UserError) return { error: e.message, code: e.code };
-      console.error(name, e);
-      return { error: 'Something went wrong. Try again, or ask an admin to check the app logs.' };
-    }
+    return guard(name, () => api[name]({ ...ctx, today: pickDay(payload?.today, today()) }, payload ?? {}));
   }
-  return { ...api, handle, autoRefresh };
+  return { ...api, handle, autoRefresh, memberOf };
+}
+
+async function guard(name, fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof UserError) return { error: e.message, code: e.code };
+    console.error(name, e);
+    return { error: 'Something went wrong. Try again, or ask an admin to check the app logs.' };
+  }
+}
+
+/**
+ * Relay for one or more teams. Each team has its own settings, plan and timesheets; requests name the team (`payload.team`).
+ * The first team keeps the original storage keys, so a site that never adds a team sees no change.
+ */
+export function createService({ store, jira, today = utcToday }) {
+  const scoped = id => (id === 't0' ? store : { get: k => store.get(id + ':' + k), set: (k, v) => store.set(id + ':' + k, v), claim: k => store.claim(id + ':' + k) });
+  const services = new Map(), team = id => services.get(id) ?? services.set(id, createTeamService({ store: scoped(id), jira, today })).get(id);
+  const teams = async () => (await store.get('teams')) ?? [{ id: 't0', name: 'Team' }];
+  const admin = async ctx => { if (!(await ctx.isAdmin())) throw new UserError('Only Jira administrators can change Relay settings.'); };
+  const teamName = v => { const n = String(v ?? '').trim().slice(0, 60); if (!n) throw new UserError('Enter a team name.'); return n; };
+
+  const routes = {
+    listTeams: async ctx => { await admin(ctx); return { teams: await teams() }; },
+    async addTeam(ctx, { name }) {
+      await admin(ctx);
+      const list = await teams();
+      if (list.length >= 50) throw new UserError('At most 50 teams are supported.');
+      const next = [...list, { id: 't' + list.length, name: teamName(name) }]; // ids are never reused: teams are not deleted
+      await store.set('teams', next);
+      return { teams: next };
+    },
+    async renameTeam(ctx, { team: id, name }) {
+      await admin(ctx);
+      const list = await teams();
+      if (!list.some(t => t.id === id)) throw new UserError('Choose a team.');
+      const next = list.map(t => (t.id === id ? { ...t, name: teamName(name) } : t));
+      await store.set('teams', next);
+      return { teams: next };
+    },
+    /** The issue panel looks for the issue in every team's plan. */
+    async issuePlan(ctx, payload) {
+      for (const t of await teams()) { const r = await team(t.id).handle('issuePlan', ctx, payload); if (r.planned) return { ...r, team: t.name }; }
+      return { planned: false };
+    },
+    /** Opens the requested team if the caller is on it, else their first team (live membership before demo teams). */
+    async getWorkspace(ctx, payload) {
+      const list = await teams(), seen = await Promise.all(list.map(async t => ({ ...t, as: await team(t.id).memberOf(ctx.accountId) })));
+      const open = seen.filter(t => t.as), id = open.some(t => t.id === payload.team) ? payload.team : (open.find(t => t.as === 'member') ?? open[0] ?? list[0]).id;
+      const ws = await team(id).handle('getWorkspace', ctx, payload);
+      return ws.error ? ws : { ...ws, team: id, teams: open.map(({ id, name }) => ({ id, name })) };
+    }
+  };
+
+  async function handle(name, ctx, payload = {}) {
+    if (Object.hasOwn(routes, name)) return guard(name, () => routes[name](ctx, payload ?? {}));
+    const list = await teams().catch(() => null);
+    if (!list) return { error: 'Something went wrong. Try again, or ask an admin to check the app logs.' };
+    const id = payload?.team ?? 't0';
+    if (!list.some(t => t.id === id)) return { error: 'This team no longer exists. Reload the page.' };
+    return team(id).handle(name, ctx, payload);
+  }
+
+  /** Scheduled refresh of every team; one team failing does not stop the others. */
+  async function autoRefresh(now = Date.now()) {
+    let refreshed = false;
+    for (const t of await teams()) {
+      try { refreshed = (await team(t.id).autoRefresh(now)).refreshed || refreshed; } catch (e) { console.error('autoRefresh', t.id, e); }
+    }
+    return refreshed ? { refreshed: true } : { skipped: true };
+  }
+  return { handle, autoRefresh };
 }

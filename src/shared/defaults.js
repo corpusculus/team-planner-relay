@@ -5,7 +5,8 @@ import { multiplier } from './estimate.js';
 export const GENERAL = {
   workdayHours: 8, slotHours: 4, dayStartHour: 8, planStart: '2026-11-30',
   estimatePercentile: 70, bufferPercentile: 90, minSamples: 3, historyMonths: 12,
-  storyPointsField: 'customfield_10016', blockLinkType: 'Blocks', internalIssue: ''
+  storyPointsField: 'customfield_10016', blockLinkType: 'Blocks', internalIssue: '',
+  memberLeave: 'off', startStatus: '', doneStatus: '', notifyChanges: false, absenceToJira: false, absenceIssues: {}
 };
 export const SIZES = [
   { id: 'S', name: 'Small', multiplier: 0.75 },
@@ -87,7 +88,7 @@ export function sampleState(settings) {
   settings.projects.forEach((p, i) => [settings.people[p.lead].skills[0], settings.people[p.lead].skills[1]].forEach((s, k) => {
     const m = multiplier(settings, i, s).value, base = settings.types[s].baseHours;
     for (let n = 0; n < 3; n++)
-      completed.push({ type: s, p: i, s, hours: Math.round(base * m * (0.8 + ((i * 7 + s * 3 + n * 5 + k) % 9) / 10)), mult: m, at: '2026-' + String(3 + ((i + n) % 8)).padStart(2, '0') + '-15', source: 'sample' });
+      completed.push({ type: s, p: i, s, hours: Math.round(base * m * (0.8 + ((i * 7 + s * 3 + n * 5 + k) % 9) / 10)), mult: m, at: '2026-' + String(3 + ((i + n) % 8)).padStart(2, '0') + '-15', source: 'sample', est: Math.round(base * m * [0.9, 1.2, 1.5, 1.1, 1.3, 1][s]), who: p.lead }); // some types run over their estimate, some under
   }));
   return {
     ...emptyState(settings), tasks, completed,

@@ -5,7 +5,8 @@ It was written by a team member as a private, free contribution under the MIT li
 
 ## What it does
 
-- Adds **Apps → Team Planner Relay**: work queue, team calendar, project outlook and timesheets for one planning team.
+- Adds **Apps → Team Planner Relay**: work queue, team calendar, project outlook and timesheets, for one or more planning teams.
+- Adds a **Team plan** panel to Jira issues: who the issue is planned for, when, and the project forecast.
 - Adds **Jira settings → Apps → Team Planner Relay settings** (admins only): team members, connected Jira projects, task types and estimation rules.
 - Until an admin switches it to live mode, it only shows fictional demo data. Nothing is read from Jira in demo mode.
 
@@ -20,10 +21,13 @@ It was written by a team member as a private, free contribution under the MIT li
 
 The app is eligible for Atlassian's *Runs on Atlassian* program: it runs and stores data only on Atlassian's platform, with no outside servers.
 
-**What Relay changes in Jira**, and only when someone clicks for it:
+**What Relay changes in Jira**, and only when someone acts in Relay:
 - *Log time* adds, edits or deletes the person's own Jira work log. Time is logged only in Jira.
+- Optional, off until an admin sets it: members record time off they have taken as work logs on issues you choose (for example an internal `ABS` project), so it stays apart from customer work.
 - *Set Jira assignee* and *Set Jira due date* (team manager only) update that one issue.
-It never transitions issues or changes anything else. Jira's own permissions apply to every change.
+- Optional, off until an admin sets it in Relay settings: starting or finishing a task moves its issue to a chosen status,
+  and a plan change that gives an issue a new owner or a later finish adds a comment that mentions the people concerned.
+It changes nothing else. Every change is made as the person who acted, so Jira's own permissions apply.
 
 **Reading:** a team manager's *Refresh* reads issues with their own Jira access. Every 5 minutes the app checks, with its own access, whether
 anything changed in the connected projects and refreshes the plan if so (and at least once an hour). Project managers only see issue titles Jira lets them browse.

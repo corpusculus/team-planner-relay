@@ -1,8 +1,8 @@
 import { defineConfig } from 'vite';
 
-// `vite` (dev) serves both pages with an in-browser backend; `--mode planner|settings` builds one Forge resource.
+// `vite` (dev) serves both pages with an in-browser backend; `--mode planner|settings|issue` builds one Forge resource.
 export default defineConfig(({ mode }) =>
-  mode === 'planner' || mode === 'settings'
+  ['planner', 'settings', 'issue'].includes(mode)
     ? { root: `static/${mode}`, base: './', build: { outDir: `../../dist/${mode}`, emptyOutDir: true } }
     : { server: { open: '/static/planner/' } }
 );

@@ -43,7 +43,11 @@ function makeJira(as) {
     addWorklog: (issue, body) => request(route`/rest/api/3/issue/${issue}/worklog?notifyUsers=false`, send('POST', body)),
     updateWorklog: (issue, id, body) => request(route`/rest/api/3/issue/${issue}/worklog/${id}?notifyUsers=false`, send('PUT', body)),
     deleteWorklog: (issue, id) => request(route`/rest/api/3/issue/${issue}/worklog/${id}?notifyUsers=false`, { method: 'DELETE' }),
-    updateIssue: (issue, fields) => request(route`/rest/api/3/issue/${issue}`, send('PUT', { fields }))
+    updateIssue: (issue, fields) => request(route`/rest/api/3/issue/${issue}`, send('PUT', { fields })),
+    status: async issue => (await request(route`/rest/api/3/issue/${issue}?fields=status`)).fields?.status?.name,
+    transitions: async issue => (await request(route`/rest/api/3/issue/${issue}/transitions`)).transitions ?? [],
+    transition: (issue, id) => request(route`/rest/api/3/issue/${issue}/transitions`, send('POST', { transition: { id } })),
+    addComment: (issue, body) => request(route`/rest/api/3/issue/${issue}/comment`, send('POST', { body }))
   };
 }
 
@@ -59,8 +63,9 @@ const service = createService({ store, jira: userJira });
 const appService = createService({ store, jira: makeJira(() => api.asApp()) });
 
 const resolver = new Resolver();
-for (const name of ['getWorkspace', 'apply', 'pushToJira', 'getSettings', 'saveSettings', 'forgetPerson', 'refresh', 'importHistory', 'jiraProjects', 'searchUsers'])
-  resolver.define(name, ({ payload, context }) => service.handle(name, { accountId: context.accountId, isAdmin: userJira.isAdmin }, payload));
+for (const name of ['getWorkspace', 'apply', 'undo', 'pushToJira', 'getSettings', 'saveSettings', 'forgetPerson', 'refresh', 'importHistory', 'jiraProjects', 'searchUsers', 'listTeams', 'addTeam', 'renameTeam', 'issuePlan'])
+  // The issue panel's issue comes from Forge's context, never from the browser.
+  resolver.define(name, ({ payload, context }) => service.handle(name, { accountId: context.accountId, isAdmin: userJira.isAdmin, issueId: context.extension?.issue?.id }, payload));
 
 export const handler = resolver.getDefinitions();
 

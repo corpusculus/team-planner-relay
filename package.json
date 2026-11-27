@@ -5,7 +5,7 @@
   "description": "Team Planner Relay: team capacity planning, estimates and timesheets for Jira Cloud (Atlassian Forge app)",
   "scripts": {
     "dev": "vite",
-    "build": "vite build --config vite.config.mjs --mode planner && vite build --config vite.config.mjs --mode settings",
+    "build": "vite build --config vite.config.mjs --mode planner && vite build --config vite.config.mjs --mode settings && vite build --config vite.config.mjs --mode issue",
     "test": "vitest run",
     "lint": "forge lint",
     "deploy": "npm run build && forge deploy -e production"

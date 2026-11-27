@@ -7,6 +7,15 @@ export class UserError extends Error {
   constructor(message, code) { super(message); this.code = code; }
 }
 
+/** Reasons a person can give for time off. Only the team manager and the person themselves see them. */
+export const LEAVE_REASONS = ['Vacation', 'Sick leave', 'Personal', 'Training', 'Other'];
+/** A timesheet entry's work is a task id, '' for internal work, or 'absence:<reason>' for time off taken. */
+export const absenceOf = task => (String(task ?? '').startsWith('absence:') ? String(task).slice(8) : null);
+/** The Jira issue that time off with this reason is logged on, or '' when none is set. */
+export const absenceIssue = (general, reason) => (general.absenceToJira ? general.absenceIssues?.[reason || 'none'] || general.absenceIssues?.none || '' : '');
+/** Who changes a member's time off: 'off' (team manager only), 'request' (member asks, manager approves) or 'free'. Older settings stored true/false. */
+export const leaveMode = general => (general.memberLeave === true ? 'free' : ['request', 'free'].includes(general.memberLeave) ? general.memberLeave : 'off');
+
 export function calendar(general) {
   const spd = general.workdayHours / general.slotHours, epoch = Date.parse(general.planStart + 'T00:00:00Z');
   // Workday index of an ISO date. Weekends map to Friday, or to the next Monday when up=true.
@@ -20,7 +29,7 @@ export function calendar(general) {
 }
 
 export function emptyState(settings) {
-  return { rev: 0, unit: unitOf(settings), tasks: [], leave: [], privateTime: [], fixed: [], notes: {}, logs: [], logMonths: [], completed: [], unmapped: [], ops: [], changes: [] };
+  return { rev: 0, unit: unitOf(settings), tasks: [], leave: [], privateTime: [], fixed: [], leaveRequests: [], notes: {}, logs: [], logMonths: [], completed: [], unmapped: [], ops: [], changes: [] };
 }
 const unitOf = settings => ({ slotHours: settings.general.slotHours, workdayHours: settings.general.workdayHours });
 
@@ -40,7 +49,7 @@ export function normalize(state, settings) {
       if (t.started) t.started.start = pos(t.started.start);
       for (const h of t.history || []) { const n = len(h.end - h.start); h.start = pos(h.start); h.end = h.start + n; }
     }
-    for (const b of [...s.leave, ...s.privateTime]) { b.start = pos(b.start); b.len = len(b.len); }
+    for (const b of [...s.leave, ...s.privateTime, ...s.leaveRequests]) { b.start = pos(b.start); b.len = len(b.len); if (b.from != null) b.from = pos(b.from); }
     for (const f of s.fixed) f.start = pos(f.start);
     for (const t of s.tasks) for (const k of ['firstStart', 'revised', 'actual']) if (t[k] == null) delete t[k];
     s.unit = to;
@@ -62,9 +71,11 @@ export function applyLogOp(logs, op, me, tasks) {
   if (existing && existing.who !== me.person) throw new UserError('You can only edit your own time entries.');
   const sameDay = logs.filter(x => x.id !== id && x.who === me.person && x.date === date).reduce((n, x) => n + x.minutes, 0);
   if (sameDay + minutes > 1440) throw new UserError('Daily entries can total up to 24 hours.');
-  const t = e.task ? tasks.find(t => t.id === e.task) : null;
-  if (e.task && !t) throw new UserError('This task is no longer in the plan.');
-  const entry = { id, who: me.person, task: t?.id ?? null, p: t?.p ?? null, date, minutes, note: String(e.note ?? '').trim().slice(0, 400) };
+  const absence = absenceOf(e.task);
+  if (absence != null && absence !== '' && !LEAVE_REASONS.includes(absence)) throw new UserError('Choose a kind of time off.');
+  const t = e.task && absence == null ? tasks.find(t => t.id === e.task) : null;
+  if (e.task && absence == null && !t) throw new UserError('This task is no longer in the plan.');
+  const entry = { id, who: me.person, task: t?.id ?? null, p: t?.p ?? null, date, minutes, note: String(e.note ?? '').trim().slice(0, 400), ...(absence != null ? { absence } : {}) };
   return logs.filter(x => x.id !== id).concat(entry);
 }
 
@@ -106,6 +117,8 @@ export function createModel(settings, todayIso) {
   const clock = s => (spd > 1 ? ' ' + String(g.dayStartHour + (s % spd) * slotH).padStart(2, '0') + ':00' : '');
   const slotLabel = s => fmt(s, { weekday: 'short', month: 'short', day: 'numeric' }) + (Number.isFinite(s) ? clock(s) : '');
   const hrs = n => n * slotH + 'h';
+  /** Dates of a time-off entry or request, with its length: '3 Dec – 4 Dec · 2 workdays' or '3 Dec · 4h'. */
+  const leaveText = l => span(l.start, l.start + l.len - 1) + ' · ' + (l.len % spd ? hrs(l.len) : l.len / spd + ' workday' + (l.len === spd ? '' : 's'));
   const daysLate = (d, due) => Math.ceil((d - due) / spd);
   const dueText = p => (Number.isFinite(p.due) ? fmt(p.due) : 'No date');
 
@@ -264,8 +277,10 @@ export function createModel(settings, todayIso) {
         const elapsed = (Date.parse(v.stamp + 'T00:00:00Z') - cal.epoch) / DAY_MS;
         if (!Number.isInteger(elapsed) || elapsed < 0 || elapsed % 7 > 4) throw new UserError('Choose a weekday on or after ' + g.planStart + '.');
         const start = (Math.floor(elapsed / 7) * 5 + (elapsed % 7)) * spd;
-        next.fixed.push({ taskId: t.id, start, preferred: plan.get(t.id).who });
-        summary = projects[t.p].name + ' · ' + t.name + ' · Fixed start ' + fmt(start);
+        const preferred = v.prefer != null && v.prefer !== '' ? Number(v.prefer) : plan.get(t.id).who;
+        if (v.prefer != null && v.prefer !== '' && !eligible(t).includes(preferred)) throw new UserError(who(preferred).short + ' does not cover ' + systems[t.s] + ' on ' + projects[t.p].name + '.');
+        next.fixed.push({ taskId: t.id, start, preferred });
+        summary = projects[t.p].name + ' · ' + t.name + ' · Fixed start ' + fmt(start) + (v.prefer != null && v.prefer !== '' ? ' · ' + who(preferred).name : '');
       }
     } else if (['estimate', 'finish', 'revise'].includes(v.kind)) {
       const t = task(v.taskId), n = slotsOf(v.hours, 1);
@@ -275,7 +290,7 @@ export function createModel(settings, todayIso) {
       if (v.kind === 'finish') {
         if (!t.started) throw new UserError('Start the task before recording its finish.');
         t.actual = n;
-        if (t.type != null) next.completed.push({ id: t.id, type: t.type, p: t.p, s: t.s, hours: n * slotH, mult: multiplier(settings, t.p, t.s, t.labels).value, at: todayIso, source: 'relay' });
+        if (t.type != null) next.completed.push({ id: t.id, type: t.type, p: t.p, s: t.s, hours: n * slotH, mult: multiplier(settings, t.p, t.s, t.labels).value, at: todayIso, source: 'relay', est: t.work * slotH, who: t.started.who });
       }
       summary = projects[t.p].name + ' · ' + t.name + ' · ' + (v.kind === 'finish' ? 'Finished in ' + hrs(n) : hrs(effectiveWork(t)) + ' expected + ' + hrs(duration(t) - effectiveWork(t)) + ' buffer');
     } else if (v.kind === 'urgent' || v.kind === 'queued') {
@@ -298,12 +313,18 @@ export function createModel(settings, todayIso) {
       if (!name) throw new UserError('Enter a private work label.');
       const old = v.blockId ? next.privateTime.find(b => b.id === v.blockId) : null;
       if (v.blockId && !old) throw new UserError('This private block no longer exists.');
-      const block = { id: old?.id ?? 'f' + crypto.randomUUID(), who: personIdx(v.who), start: slotIdx(v.start), len, name };
-      next.privateTime = next.privateTime.filter(b => b.id !== block.id).concat(block);
-      summary = who(block.who).name + ' · Protected time · ' + span(block.start, block.start + block.len - 1);
+      const weeks = old ? 1 : Number(v.repeat || 1);
+      if (!Number.isInteger(weeks) || weeks < 1 || weeks > 26) throw new UserError('Repeat for 1 to 26 weeks.');
+      // Repeated blocks share a series id, so the later ones can be released together.
+      const w = personIdx(v.who), start = slotIdx(v.start), series = weeks > 1 ? 's' + crypto.randomUUID().slice(0, 8) : old?.series;
+      const blocks = Array.from({ length: weeks }, (_, k) => ({ id: (!k && old?.id) || 'f' + crypto.randomUUID(), who: w, start: start + k * weekSlots, len, name, ...(series ? { series } : {}) }));
+      next.privateTime = next.privateTime.filter(b => b.id !== old?.id).concat(blocks);
+      summary = who(w).name + ' · Protected time · ' + span(start, start + len - 1) + (weeks > 1 ? ' · every week for ' + weeks + ' weeks' : '');
     } else if (v.kind === 'leave') {
-      const w = personIdx(v.who), start = slotIdx(v.start), days = Number(v.days);
-      if (!Number.isInteger(days) || days < 1 || days > 60) throw new UserError('Choose 1 to 60 days away.');
+      // Length in slots (`len`, so part of a day works); older clients send whole `days`.
+      const w = personIdx(v.who), start = slotIdx(v.start), len = v.len != null && v.len !== '' ? Number(v.len) : Number(v.days) * spd;
+      if (!Number.isInteger(len) || len < 1 || len > 60 * spd) throw new UserError('Choose up to 60 days away.');
+      const reason = LEAVE_REASONS.includes(v.reason) ? v.reason : '';
       // `from` is the start of an existing entry being rescheduled: it is replaced instead of added to.
       const moving = v.from != null && v.from !== '';
       if (moving) {
@@ -311,10 +332,10 @@ export function createModel(settings, todayIso) {
         if (at < 0) throw new UserError('This time off no longer exists.');
         next.leave.splice(at, 1);
       }
-      const len = days * spd, existing = next.leave.filter(x => x.who === w);
+      const existing = next.leave.filter(x => x.who === w);
       if (Array.from({ length: len }, (_, k) => start + k).every(d => existing.some(l => l.start <= d && l.start + l.len > d))) throw new UserError('This person is already away for those dates.');
-      next.leave.push({ who: w, start, len });
-      summary = who(w).name + (moving ? ' · Time off moved to ' : ' away · ') + span(start, start + len - 1);
+      next.leave.push({ who: w, start, len, ...(reason ? { reason } : {}) });
+      summary = who(w).name + (moving ? ' · Time off moved to ' : ' · ' + (reason || 'Time off') + ' · ') + leaveText({ start, len });
     } else if (v.kind === 'extend') {
       const t = task(v.taskId);
       if (t.actual != null) throw new UserError('This task is already finished.');
@@ -326,6 +347,13 @@ export function createModel(settings, todayIso) {
       return b && (a.start !== b.start || a.end !== b.end || a.who !== b.who);
     });
     return { next, slots, moved, summary };
+  }
+
+  /** Remove one time-off entry (a person's entries are told apart by their start) and return it. */
+  function dropLeave(next, w, start) {
+    const at = next.leave.findIndex(x => x.who === w && x.start === start);
+    if (at < 0) throw new UserError('This time off no longer exists.');
+    return next.leave.splice(at, 1)[0];
   }
 
   /** Apply any change to the plan. Returns { next, message, summary }; throws UserError when invalid. */
@@ -342,13 +370,40 @@ export function createModel(settings, todayIso) {
       next.tasks.find(a => a.id === t.id).started = { who: x.who, start: x.start };
       message = 'Started ' + t.name + ' on ' + fmt(x.start) + '.';
     } else if (op.kind === 'releasePrivate') {
-      next.privateTime = next.privateTime.filter(b => b.id !== op.id);
-      message = 'Private time released.';
+      const b = state.privateTime.find(x => x.id === op.id);
+      if (!b) throw new UserError('This private block no longer exists.');
+      // `later`: this block and the later ones of its weekly series.
+      next.privateTime = next.privateTime.filter(x => (op.later && b.series ? !(x.series === b.series && x.start >= b.start) : x.id !== b.id));
+      message = 'Private time released' + (op.later && b.series ? ' from ' + fmt(b.start) + ' on.' : '.');
     } else if (op.kind === 'releaseLeave') {
-      const at = next.leave.findIndex(x => x.who === Number(op.who) && x.start === Number(op.start));
-      if (at < 0) throw new UserError('This time off no longer exists.');
-      const [gone] = next.leave.splice(at, 1);
-      message = who(gone.who).name + ' · Time off removed · ' + span(gone.start, gone.start + gone.len - 1);
+      const gone = dropLeave(next, Number(op.who), Number(op.start));
+      message = who(gone.who).name + ' · Time off removed · ' + leaveText(gone);
+    } else if (op.kind === 'requestLeave') {
+      // A member asks for new, moved or removed time off; nothing changes until the team manager approves.
+      const v = op.v || {}, w = personIdx(v.who), from = v.from != null && v.from !== '' ? Number(v.from) : null;
+      let req;
+      if (v.remove) {
+        const l = state.leave.find(x => x.who === w && x.start === from);
+        if (!l) throw new UserError('This time off no longer exists.');
+        req = { who: w, from, remove: true, start: l.start, len: l.len, reason: l.reason ?? '' };
+      } else {
+        const added = makeDraft(state, plan, { ...v, kind: 'leave' }).next.leave.at(-1); // validates dates and the existing entry
+        req = { who: w, from, start: added.start, len: added.len, reason: added.reason ?? '' };
+      }
+      // A newer request for the same entry replaces the older one.
+      next.leaveRequests = next.leaveRequests.filter(r => from == null || r.who !== w || r.from !== from).concat({ id: 'r' + crypto.randomUUID().slice(0, 8), at: todayIso, ...req });
+      message = 'Request sent. The team manager will approve or decline it.';
+      summary = who(w).name + ' requested ' + (req.remove ? 'removing time off · ' : from != null ? 'moving time off to ' : (req.reason || 'time off') + ' · ') + leaveText(req);
+    } else if (['approveRequest', 'declineRequest', 'cancelRequest'].includes(op.kind)) {
+      const r = state.leaveRequests.find(x => x.id === op.id);
+      if (!r) throw new UserError('This request was already handled.');
+      const rest = next.leaveRequests.filter(x => x.id !== r.id);
+      if (op.kind === 'approveRequest') {
+        if (r.remove) dropLeave(next, r.who, r.from);
+        else next = makeDraft(state, plan, { kind: 'leave', who: r.who, start: r.start, len: r.len, reason: r.reason, from: r.from }).next;
+      }
+      next.leaveRequests = rest;
+      message = who(r.who).name + ' · ' + (r.remove ? 'Removing time off' : 'Time off') + ' ' + leaveText(r) + ' · ' + { approveRequest: 'approved', declineRequest: 'declined', cancelRequest: 'request cancelled' }[op.kind];
     } else if (op.kind === 'note') {
       const p = Number(op.p);
       if (!projects[p]) throw new UserError('Choose a project.');
@@ -361,7 +416,7 @@ export function createModel(settings, todayIso) {
 
   return {
     settings, people, projects, systems, types, cal, spd, slotH, weekSlots, now,
-    fmt, span, slotLabel, hrs, daysLate, dueText, who,
+    fmt, span, slotLabel, hrs, leaveText, daysLate, dueText, who,
     effectiveWork, duration, spent, remaining, statusOf, eligible, schedule, finish, startBlocker, makeDraft, applyOp, off, isHoliday, take
   };
 }
