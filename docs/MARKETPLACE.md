@@ -23,7 +23,7 @@ Links to use in the listing:
 
 **Tagline:** Team capacity planning on top of your Jira issues — estimates, calendar and timesheets in one place.
 
-**Summary:** Plan who does what, and when, across several Jira projects. Relay schedules your issues on a shared team calendar,
+**Summary:** Plan who does what, and when, across several Jira projects and teams. Relay schedules your issues on a shared team calendar,
 estimates them from your own history, respects holidays and part-time days, and shows each project manager a realistic
 forecast. Time is logged straight into Jira work logs.
 
@@ -33,10 +33,13 @@ forecast. Time is logged straight into Jira work logs.
    is double-booked, and gives each project its own forecast date.
 2. **Estimates that learn.** Task types with base hours and buffers, scaled by system size and complexity, and replaced by the
    70th percentile of your finished work once there is enough history.
-3. **Realistic capacity.** Public holidays, part-time days, private focus time and absences are all part of the plan. Preview any
-   change before applying it.
-4. **Time logged in Jira.** Log time from Relay as Jira work logs; reports and CSV export read them back.
-5. **Safe by role.** Team members, team managers and project managers each see what they need. Project managers only see issues
-   Jira lets them browse.
+3. **Realistic capacity.** Public holidays, part-time days, weekly focus time and time off (half days too) are all part of the plan.
+   Members can request time off for their manager to approve. Preview any change, drag tasks on the calendar, undo the last one.
+4. **Time logged in Jira.** Log time from Relay as Jira work logs, and optionally time off on its own internal issues, apart from
+   customer work. Reports, an estimate accuracy report and CSV export read them back.
+5. **Right where people work.** A Team plan panel on every Jira issue shows who it is planned for and when. Optional status moves
+   and comments keep Jira in step with the plan.
+6. **Safe by role, for several teams.** Each team has its own plan. Team members, team managers and project managers each see what
+   they need; project managers only see issues Jira lets them browse.
 
 **Category suggestions:** Project management, Time tracking, Workflow.
