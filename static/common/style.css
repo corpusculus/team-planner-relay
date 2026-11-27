@@ -307,6 +307,7 @@ textarea{width:100%;min-width:0;font:inherit;border:1px solid #c7d1cb;border-rad
 .td-status.s-done{background:#e9ece9;color:#4d5a53}
 .td-status.s-on-track{background:#dcefe6;color:#1d6b4c}
 .td-status.s-late{background:#f8e3d9;color:#8a3a1c}
+.td-status.s-at-risk{background:#f6ecd6;color:#7a5a17}
 .td-status{white-space:nowrap;display:inline-block;justify-self:start}
 .td-proj{display:inline-flex;align-items:center;gap:6px;font-weight:620}
 .td-when{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:14px 16px;border-radius:10px;background:var(--tint);color:var(--fg);border-left:4px solid var(--accent)}

@@ -1,5 +1,5 @@
 // Relay planner UI (ported from team-planner.html). The backend owns the plan; this page previews and sends changes.
-import { createModel, leaveMode, absenceIssue, LEAVE_REASONS } from '../../src/shared/model.js';
+import { createModel, leaveMode, absenceIssue, slotCounts, LEAVE_REASONS, SCENARIO_KINDS } from '../../src/shared/model.js';
 import { estimate, toSlots } from '../../src/shared/estimate.js';
 import { call, openIssue, isLocal, session } from '../common/backend.js';
 import { $, esc, options, modal } from '../common/ui.js';
@@ -10,8 +10,8 @@ const colors = [['#248275', '#d8eee8', '#184e46'], ['#7460a8', '#e9e3f5', '#493c
   ['#6b7785', '#e6e9ed', '#3f4852'], ['#c25f8f', '#f8e2ec', '#7a3556'], ['#8a6248', '#efe4db', '#573c2a']];
 
 // Workspace (set by useWorkspace)
-let settings, today, me, M, people, projects, systems, types, state, plan;
-let teams = [], undo = null;
+let settings, today, me, M, people, projects, systems, types, state, plan, likely;
+let teams = [], undo = null, scenario = null; // scenario: unsaved what-if { list, summaries, next, slots }
 try { session.team = sessionStorage.getItem('relay.team') ?? undefined; } catch {}
 let fmt, span, slotLabel, hrs, leaveText, daysLate, dueText, who, effectiveWork, duration, spent, statusOf, eligible, finish, off, take;
 let spd, slotH, weekSlots, timeInJira = false;
@@ -30,6 +30,8 @@ function useWorkspace(ws) {
   if (role === 'pm' && !me.pmProjects.includes(pmProject)) pmProject = me.pmProjects[0] ?? 0;
   if (!people[member]) member = 0;
   plan = M.schedule(state);
+  likely = likelyOf(state, plan);
+  if (scenario) scenario = replay(scenario.list);
   timeInJira = !!ws.timeInJira;
   if (!booted) { booted = true; setPeriod('week', anchorDay()); tab = role === 'pm' ? 'outlook' : 'home'; }
 }
@@ -72,7 +74,28 @@ function periodPicker() {
 const startBlocker = t => M.startBlocker(state, plan, t);
 /** Coloured status label; `kind` picks the colour and defaults to the text. */
 const pill = (text, kind = text) => '<span class="td-status s-' + kind.toLowerCase().replace(/ /g, '-') + '">' + text + '</span>';
-const outlookPill = (d, p) => pill(outlookText(d, p), !Number.isFinite(d) ? 'waiting' : d > p.due ? 'late' : 'on-track');
+const outlookPill = (d, p, low = d) => pill(outlookText(d, p, low), !Number.isFinite(d) ? 'waiting' : low > p.due ? 'late' : d > p.due ? 'at-risk' : 'on-track');
+/** The plan of `st` with no buffer used; its own `slots` if that cannot be planned. */
+const likelyOf = (st, slots) => { try { return M.likelySchedule(st); } catch { return slots; } };
+/** [likely, latest] finish of project i: without buffers, and with every buffer used. */
+const forecastIn = (st, slots, low, i) => { const high = finish(st, slots, i); return [Math.min(finish(st, low, i), high), high]; };
+const forecast = i => forecastIn(state, plan, likely, i);
+/** Milestones whose forecast differs between the current plan and `next` (planned as `slots`), as likely – latest ranges. */
+function impact(next, slots) {
+  const low = likelyOf(next, slots);
+  const rows = projects.map((p, i) => ({ p, old: forecast(i), now: forecastIn(next, slots, low, i) })).filter(x => !x.p.archived && (x.old[0] !== x.now[0] || x.old[1] !== x.now[1]));
+  return { count: rows.length, html: rows.map(x => '<div class="detail"><b>' + esc(x.p.name) + ' · ' + span(...x.old) + ' → ' + span(...x.now) + '</b><small>Requested by ' + dueText(x.p) + ' · ' + outlookText(x.now[1], x.p, x.now[0]) + '</small></div>').join('') || '<p>All project forecasts hold.</p>' };
+}
+const movedIn = slots => state.tasks.filter(t => { const a = plan.get(t.id), b = slots.get(t.id); return b && (a.start !== b.start || a.end !== b.end || a.who !== b.who); });
+/** Recalculate the what-if scenario on the current plan; drop it when its changes no longer fit. */
+function replay(list) {
+  try {
+    let next = state, slots = plan;
+    const summaries = [];
+    for (const v of list) { const d = M.makeDraft(next, slots, v); ({ next, slots } = d); summaries.push(d.summary); }
+    return { list, summaries, next, slots };
+  } catch (e) { announce('The what-if scenario was discarded: ' + e.message); return null; }
+}
 /** Workday index of today, or -1 on weekends and before the plan starts. */
 const todayDay = () => (today >= settings.general.planStart && M.cal.isWeekday(today) ? M.cal.dayIndex(today) : -1);
 const active = list => list.map((x, i) => [x, i]).filter(([x]) => !x.archived);
@@ -119,7 +142,8 @@ function endWeek() {
     ...[...state.leave, ...state.privateTime, ...state.fixed.map(f => ({ start: f.start, len: 1 })), ...state.tasks.flatMap(t => (t.history || []).map(h => ({ start: h.start, len: h.end - h.start })))].map(x => w(x.start + x.len - 1)));
 }
 function projectLink(i) { return '<button class="project" data-project="' + i + '"><i class="dot" style="' + color(i) + '"></i>' + esc(projects[i].name) + '</button>'; }
-function outlookText(d, p) { return !Number.isFinite(d) ? 'Waiting' : d > p.due ? daysLate(d, p.due) + ' workdays late' : 'On track'; }
+/** `low` is the likely finish: late when even that misses the date, at risk when only the buffers push it past. */
+function outlookText(d, p, low = d) { return !Number.isFinite(d) ? 'Waiting' : low > p.due ? (n => n + ' workday' + (n === 1 ? '' : 's') + ' late')(daysLate(low, p.due)) : d > p.due ? 'At risk' : 'On track'; }
 const pageInfo = {
   home: ['Overview', ''], sheet: ['Timesheet', 'Hours you have recorded against project tasks and internal work.'],
   report: ['Report', ''],
@@ -157,7 +181,7 @@ function render() {
     btn.classList.toggle('active', k === tab); btn.setAttribute('aria-current', k === tab ? 'page' : 'false');
   }
   const views = { home: personal ? memberHome : managerHome, queue: queueView, schedule: () => (role === 'pm' ? pmCalendarHeader() : board()), coverage, outlook: pmView, sheet: timesheetView, report: reportView };
-  $('view').innerHTML = views[tab]();
+  $('view').innerHTML = (scenario && role === 'team' ? scenarioPanel() : '') + views[tab]();
   // Phones show table rows as labelled blocks (CSS .stack); labels come from the header cells.
   for (const table of $('view').querySelectorAll('table.data:not(.load-table)')) {
     const heads = [...table.querySelectorAll('th')].map(th => th.textContent);
@@ -230,7 +254,7 @@ function board() {
 
 function milestones() {
   const indices = active(projects).map(([, i]) => i).filter(i => filter === 'all' || String(i) === filter), list = showAll ? indices : indices.slice(0, 5);
-  return '<section class="panel" id="milestones"><div class="section-head"><div><h2>Project milestones</h2><p>Forecast completion of each project’s planned work.</p></div><select id="filter" aria-label="Filter milestones by project"><option value="all">All projects</option>' + active(projects).map(([p, i]) => '<option value="' + i + '" ' + (filter === String(i) ? 'selected' : '') + '>' + esc(p.name) + '</option>').join('') + '</select></div><div class="scroll"><table class="data"><thead><tr><th>Project</th><th>Primary</th><th>Requested by</th><th>Forecast</th><th>Outlook</th></tr></thead><tbody>' + list.map(i => { const d = finish(state, plan, i), p = projects[i]; return '<tr><td>' + projectLink(i) + '</td><td>' + esc(who(p.lead).short) + '</td><td>' + dueText(p) + '</td><td>' + fmt(d) + '</td><td>' + outlookPill(d, p) + '</td></tr>'; }).join('') + '</tbody></table></div>' + (indices.length > 5 ? '<div class="foot"><span>' + list.length + ' of ' + indices.length + ' projects</span><button class="link" id="more">' + (showAll ? 'Show fewer' : 'Show all projects') + '</button></div>' : '') + '</section>';
+  return '<section class="panel" id="milestones"><div class="section-head"><div><h2>Project milestones</h2><p>Likely finish of each project’s planned work, and the latest if every buffer is used.</p></div><select id="filter" aria-label="Filter milestones by project"><option value="all">All projects</option>' + active(projects).map(([p, i]) => '<option value="' + i + '" ' + (filter === String(i) ? 'selected' : '') + '>' + esc(p.name) + '</option>').join('') + '</select></div><div class="scroll"><table class="data"><thead><tr><th>Project</th><th>Primary</th><th>Requested by</th><th>Forecast</th><th>Outlook</th></tr></thead><tbody>' + list.map(i => { const [low, d] = forecast(i), p = projects[i]; return '<tr><td>' + projectLink(i) + '</td><td>' + esc(who(p.lead).short) + '</td><td>' + dueText(p) + '</td><td>' + span(low, d) + '</td><td>' + outlookPill(d, p, low) + '</td></tr>'; }).join('') + '</tbody></table></div>' + (indices.length > 5 ? '<div class="foot"><span>' + list.length + ' of ' + indices.length + ' projects</span><button class="link" id="more">' + (showAll ? 'Show fewer' : 'Show all projects') + '</button></div>' : '') + '</section>';
 }
 function coverage() {
   return '<section class="panel"><div class="section-head"><div><h2>Project contacts</h2><p>Select a project for system-level coverage and scheduled tasks.</p></div></div><div class="scroll"><table class="data"><thead><tr><th>Project</th><th>Primary</th><th>Backup</th><th>Systems</th></tr></thead><tbody>' + active(projects).map(([p, i]) => '<tr><td>' + projectLink(i) + '</td><td>' + esc(who(p.lead).name) + '</td><td>' + (p.back === null ? 'No backup' : esc(who(p.back).name)) + '</td><td>' + p.systems.length + '</td></tr>').join('') + '</tbody></table></div></section>';
@@ -300,7 +324,7 @@ function taskCard(t, x, actions, blocker) {
 function projectDetail(i) {
   if (role !== 'team') return;
   const p = projects[i];
-  modal(p.name, '<p class="note">Requested by <b>' + dueText(p) + '</b> · Forecast <b>' + fmt(finish(state, plan, i)) + '</b>' + (p.jiraKey ? ' · Jira ' + esc(p.jiraKey) : '') + '</p>' + noteView(i) + '<h3>System coverage</h3>' + p.systems.map(s => '<div class="detail">' + esc(systems[s]) + ' · ' + eligible({ p: i, s }).map(w => esc(people[w].name)).join(', ') + '</div>').join('') + '<h3>Scheduled tasks</h3>' + state.tasks.filter(t => t.p === i).map(t => { const x = plan.get(t.id); return '<div class="detail"><button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button><small>' + esc(who(x.who).name) + ' · ' + span(x.start, x.end - 1) + '</small></div>'; }).join(''));
+  modal(p.name, '<p class="note">Requested by <b>' + dueText(p) + '</b> · Forecast <b>' + span(...forecast(i)) + '</b>' + (p.jiraKey ? ' · Jira ' + esc(p.jiraKey) : '') + '</p>' + noteView(i) + '<h3>System coverage</h3>' + p.systems.map(s => '<div class="detail">' + esc(systems[s]) + ' · ' + eligible({ p: i, s }).map(w => esc(people[w].name)).join(', ') + '</div>').join('') + '<h3>Scheduled tasks</h3>' + state.tasks.filter(t => t.p === i).map(t => { const x = plan.get(t.id); return '<div class="detail"><button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button><small>' + esc(who(x.who).name) + ' · ' + span(x.start, x.end - 1) + '</small></div>'; }).join(''));
 }
 function selectField(label, key, items, value, wide = false) { return '<label class="field ' + (wide ? 'full' : '') + '">' + label + '<select name="' + key + '" id="field-' + key + '">' + options(items, value) + '</select></label>'; }
 function values() { return Object.fromEntries(new FormData($('changeForm'))); }
@@ -359,20 +383,32 @@ function changeForm(v = {}) {
   modal(adding ? 'Add a task' : moving ? (requesting() ? 'Request new dates' : 'Reschedule time off') : kind === 'leave' && role === 'member' ? (requesting() ? 'Request time off' : 'Time off') : role === 'member' ? 'Protect time' : 'Change the plan', '<p>' + (adding ? 'Preview where it lands and what it moves before you apply it.' : current ? esc(who(current.who).name) + ' is away ' + leaveText(current) + '. Choose the new dates.' : kind === 'leave' && requesting() ? 'Preview the effect, then send the request. It counts once the team manager approves it.' : 'Preview the effect on the published schedule. You decide whether to apply it.') + '</p><form id="changeForm"><div class="formgrid">' + fields + '</div>' + footer + '</form>');
 }
 
+/** The unsaved what-if: its changes and how the milestones move against the current plan. */
+function scenarioPanel() {
+  const { list, summaries, next, slots } = scenario, n = list.length, moved = movedIn(slots).length;
+  return '<section class="panel" id="scenario"><div class="section-head"><div><h2>What-if scenario · not saved</h2><p>' + n + ' change' + (n === 1 ? '' : 's') + ' · ' + moved + ' existing assignment' + (moved === 1 ? ' moves' : 's move') + '. The calendar and reports still show the current plan; add more changes with Add task or Other changes.</p></div></div><div class="content"><ol>' + summaries.map(x => '<li>' + esc(x) + '</li>').join('') + '</ol><h3>Milestone impact</h3>' + impact(next, slots).html +
+    '<div class="actions"><button id="discardScenario">Discard scenario</button><button class="primary" id="applyScenario">Apply ' + n + ' change' + (n === 1 ? '' : 's') + '</button></div></div></section>';
+}
+
 function preview(v) {
   if ((v.kind === 'urgent' || v.kind === 'queued') && Number(v.hours) !== Number(v.estHours)) v.source = 'Entered in Relay';
-  formValues = v; draft = M.makeDraft(state, plan, v);
-  const { next, slots, moved, summary } = draft;
-  const changed = projects.map((p, i) => ({ p, i, old: finish(state, plan, i), now: finish(next, slots, i) })).filter(x => x.old !== x.now);
+  formValues = v;
+  // A team manager's planning change joins the open what-if scenario, so its preview builds on the scenario.
+  const whatIf = role === 'team' && SCENARIO_KINDS.includes(v.kind), base = whatIf && scenario ? scenario : { next: state, slots: plan };
+  draft = M.makeDraft(base.next, base.slots, v);
+  const { next, slots, summary } = draft, moved = movedIn(slots);
   if (role === 'member') {
     const own = moved.filter(t => plan.get(t.id).who === member || slots.get(t.id).who === member);
     modal('Change preview', '<p>' + esc(summary) + '</p><div class="note">' + own.length + ' of your assignments change.</div>' + own.map(t => '<div class="detail">' + esc(projects[t.p].name) + ' · ' + esc(t.name) + '<small>' + span(plan.get(t.id).start, plan.get(t.id).end - 1) + ' → ' + span(slots.get(t.id).start, slots.get(t.id).end - 1) + '</small></div>').join('') + '<div class="actions"><button data-dismiss>Discard</button><button class="primary" id="apply">' + (requesting() && v.kind === 'leave' ? 'Send request' : 'Apply change') + '</button></div>');
     return;
   }
-  const newTask = next.tasks.length > state.tasks.length ? next.tasks[next.tasks.length - 1] : null;
+  const changed = impact(next, slots);
+  const newTask = next.tasks.length > base.next.tasks.length ? next.tasks[next.tasks.length - 1] : null;
+  const more = whatIf && (scenario?.list.length ?? 0) < 20;
+  const buttons = whatIf && scenario ? (more ? '<button class="primary" id="addScenario">Add to scenario</button>' : '<span class="sub">A scenario holds up to 20 changes.</span>') : (more ? '<button id="addScenario">Try with more changes</button>' : '') + '<button class="primary" id="apply">Apply change</button>';
   const desc = x => who(x.who).short + ' · ' + span(x.start, x.end - 1);
   const newRow = newTask ? '<div class="detail"><b>New assignment</b>' + esc(desc(slots.get(newTask.id))) + '</div>' : '';
-  modal('Change preview', '<p>' + esc(summary) + '</p><div class="note"><b>' + moved.length + ' existing assignment' + (moved.length === 1 ? '' : 's') + ' changed · ' + changed.length + ' milestone' + (changed.length === 1 ? '' : 's') + ' moved</b></div>' + newRow + '<h3>Milestone impact</h3>' + (changed.map(x => '<div class="detail"><b>' + esc(x.p.name) + ' · ' + fmt(x.old) + ' → ' + fmt(x.now) + '</b><small>Requested by ' + dueText(x.p) + ' · ' + outlookText(x.now, x.p) + '</small></div>').join('') || '<p>All project forecasts hold.</p>') + (moved.length ? '<details><summary>Inspect ' + moved.length + ' changed assignment' + (moved.length === 1 ? '' : 's') + '</summary>' + moved.map(t => '<div class="detail"><b>' + esc(projects[t.p].name) + ' · ' + esc(t.name) + '</b><small>' + esc(desc(plan.get(t.id))) + ' → ' + esc(desc(slots.get(t.id))) + '</small></div>').join('') + '</details>' : '') + '<div class="actions"><button id="editChange">Edit change</button><button data-dismiss>Discard</button><button class="primary" id="apply">Apply change</button></div>');
+  modal(base === scenario ? 'Scenario preview' : 'Change preview', '<p>' + esc(summary) + '</p>' + (base === scenario ? '<p class="sub">Compared with the current plan, with the ' + scenario.list.length + ' change' + (scenario.list.length === 1 ? '' : 's') + ' already in the scenario.</p>' : '') + '<div class="note"><b>' + moved.length + ' existing assignment' + (moved.length === 1 ? '' : 's') + ' changed · ' + changed.count + ' milestone' + (changed.count === 1 ? '' : 's') + ' moved</b></div>' + newRow + '<h3>Milestone impact</h3>' + changed.html + (moved.length ? '<details><summary>Inspect ' + moved.length + ' changed assignment' + (moved.length === 1 ? '' : 's') + '</summary>' + moved.map(t => '<div class="detail"><b>' + esc(projects[t.p].name) + ' · ' + esc(t.name) + '</b><small>' + esc(desc(plan.get(t.id))) + ' → ' + esc(desc(slots.get(t.id))) + '</small></div>').join('') + '</details>' : '') + '<div class="actions"><button id="editChange">Edit change</button><button data-dismiss>Discard</button>' + buttons + '</div>');
 }
 async function pushToJira(taskId, field) {
   if (busy) return;
@@ -422,7 +458,7 @@ document.addEventListener('change', e => {
   if (id === 'teamPick') {
     session.team = e.target.value;
     try { sessionStorage.setItem('relay.team', session.team); } catch {}
-    booted = false; tab = 'home'; personFilter = 'all'; filter = 'all'; announce(''); load();
+    booted = false; scenario = null; tab = 'home'; personFilter = 'all'; filter = 'all'; announce(''); load();
   }
   if (id === 'pmProject') { pmProject = Number(e.target.value); announce(''); render(); }
 });
@@ -472,6 +508,17 @@ document.addEventListener('click', e => {
   if (b.id === 'undoLast') modal('Undo the last change?', '<p class="note">' + esc(undo) + '</p><p>The plan goes back to how it was before it. Anything already written to Jira (work logs, statuses, comments) stays as it is.</p><div class="actions"><button data-dismiss>Cancel</button><button class="primary" id="confirmUndo">Undo change</button></div>');
   if (b.id === 'confirmUndo') runUndo();
   if (b.id === 'rulesLink') modal('How planning works', rulesHtml(settings, timeInJira));
+  if (b.id === 'addScenario' && draft) {
+    scenario = replay([...(scenario?.list ?? []), formValues]);
+    $('modal').close(); render(); announce('Added to the what-if scenario. Nothing is saved until you apply it.');
+  }
+  if (b.id === 'discardScenario') { scenario = null; render(); announce('Scenario discarded. The plan is unchanged.'); }
+  if (b.id === 'applyScenario' && scenario) {
+    // Cleared first so the new workspace is not replayed on top of itself; restored if the change fails.
+    const list = scenario.list;
+    scenario = null;
+    send({ kind: 'scenario', list, baseRev: state.rev }, 'Scenario applied. The schedule and milestone forecasts are updated.').then(ok => { if (!ok && !scenario) { scenario = replay(list); render(); } });
+  }
   if (b.id === 'apply' && draft) requesting() && formValues.kind === 'leave' ? send({ kind: 'requestLeave', v: formValues }, 'Request sent. The team manager will approve or decline it.') : send({ kind: 'draft', v: formValues, baseRev: state.rev });
   if (b.id === 'confirmReset') { tab = 'home'; personFilter = 'all'; filter = 'all'; showAll = false; booted = false; send({ kind: 'reset' }, 'Sample plan restored.'); }
 });
@@ -496,16 +543,16 @@ function pmHeader() {
 function pmView() {
   const p = projects[pmProject];
   if (!p) return '<p class="empty">No projects are assigned to you yet. Ask a Jira administrator to add them in Relay settings.</p>';
-  const forecast = finish(state, plan, pmProject);
+  const [low, high] = forecast(pmProject);
   const fixed = state.fixed.map(f => ({ f, t: state.tasks.find(t => t.id === f.taskId) })).filter(x => x.t?.p === pmProject);
   const blockers = state.tasks.filter(t => t.p === pmProject && t.wait?.shared).map(t => '<p class="wait-note">' + esc(t.wait.reason) + '</p>').join('');
   const dates = fixed.length ? fixed.map(({ f, t }) => '<div class="detail">' + esc(t.name) + ' · <b>' + fmt(f.start) + '</b>' + (!Number.isFinite(plan.get(t.id).end) ? ' · At risk' : '') + '</div>').join('') : '<p class="sub">No fixed starts recorded.</p>';
-  const risk = !Number.isFinite(forecast) ? 'Awaiting input' : forecast > p.due ? 'Forecast runs late' : 'On track';
-  const tone = !Number.isFinite(forecast) ? ' tone-waiting' : forecast > p.due ? ' tone-late' : '';
+  const risk = !Number.isFinite(high) ? 'Awaiting input' : low > p.due ? 'Forecast runs late' : high > p.due ? 'At risk' : 'On track';
+  const tone = !Number.isFinite(high) || (high > p.due && low <= p.due) ? ' tone-waiting' : low > p.due ? ' tone-late' : '';
   const tasks = state.tasks.filter(t => t.p === pmProject);
   const logged = logsInPeriod().filter(e => e.p === pmProject);
   const header = pmHeader();
-  const outlook = '<section class="focus-card' + tone + '"><div class="focus-label">' + risk + '</div><div class="focus-content"><small>' + esc(p.name) + ' milestone</small><h2>' + fmt(forecast) + '</h2><p>Requested by ' + dueText(p) + (Number.isFinite(forecast) && forecast > p.due ? ' · ' + daysLate(forecast, p.due) + ' workdays beyond target' : '') + '</p></div></section>';
+  const outlook = '<section class="focus-card' + tone + '"><div class="focus-label">' + risk + '</div><div class="focus-content"><small>' + esc(p.name) + ' milestone</small><h2>' + span(low, high) + '</h2><p>Requested by ' + dueText(p) + (Number.isFinite(low) && low > p.due ? ' · ' + daysLate(low, p.due) + ' workdays beyond target' : Number.isFinite(high) && high > p.due ? ' · on time only if the buffers are not needed' : '') + (low !== high && Number.isFinite(high) ? ' · Likely ' + fmt(low) + ', latest ' + fmt(high) : '') + '</p></div></section>';
   const effort = '<section class="panel summary-card"><div class="section-head"><h2>Project time</h2><small>' + periodLabel() + '</small></div><div class="time-large">' + hours(sumTime(logged)) + '</div><div class="sub">Recorded on ' + esc(p.name) + '</div><button class="link" data-page="report">Open project report →</button></section>';
   return header + '<div class="dash-pair">' + outlook + effort + '</div><section class="panel"><div class="section-head"><h2>Delivery details</h2><span class="sub">' + tasks.filter(t => t.actual != null).length + ' of ' + tasks.length + ' tasks completed</span></div><div class="content"><div class="effort-bar" aria-hidden="true"><span class="seg-work" style="width:' + (tasks.length ? 100 * tasks.filter(t => t.actual != null).length / tasks.length : 0) + '%"></span></div><h3>Fixed starts</h3>' + dates + (blockers ? '<h3>Help needed</h3>' + blockers : '') + noteView(pmProject) + '</div></section>' +
     tableBox('Tasks', ['Task', 'Owner', 'Forecast', 'State'], tasks.map(t => { const x = plan.get(t.id); return ['<button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button><small class="meta-line">' + esc(systems[t.s]) + '</small>', esc(who(x.who).name), span(x.start, x.end - 1), pill(statusOf(t))]; }), 'No tasks planned for this project yet.');
@@ -617,7 +664,7 @@ function managerHome() {
   const cell = day => day.every(k => k === day[0]) ? slotCell(day[0]) : '<span class="load-split">' + day.map(slotCell).join('') + '</span>';
   const capacity = '<section class="panel" id="capacity"><div class="section-head"><div><h2>Team capacity</h2><p>One cell per person per workday, split into ' + slotH + 'h slots when they differ.</p></div>' + periodPicker() + '</div><div class="scroll"><table class="data load-table"><thead><tr><th>Team member</th>' + Array.from({ length: nd }, (_, i) => '<th' + (d0 + i === todayDay() ? ' class="today"' : '') + '>' + fmt((d0 + i) * spd, { weekday: 'short', day: 'numeric' }) + '</th>').join('') + '</tr></thead><tbody>' + loads.map((slots, r) => '<tr><td>' + esc(team[r][0].name) + '</td>' + Array.from({ length: nd }, (_, d) => '<td>' + cell(slots.slice(d * spd, d * spd + spd)) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div></section>';
   const requests = state.leaveRequests ?? [];
-  return (requests.length ? tableBox('Time-off requests', ['Who', 'Asks to', 'When', 'Reason', ''], requests.map(r => [esc(who(r.who).name), r.remove ? 'Remove time off' : r.from != null ? 'Move time off' : 'Take time off', leaveText(r), esc(r.reason || '—'), '<button data-review-request="' + r.id + '">Review</button>']), '', 'requests') : '') + metrics([['Open capacity', loads.flat().filter(k => k === 'free').length * slotH + 'h', '', 'capacity'], ['Tasks waiting now', waiting.length, waiting.length ? 'warn' : '', 'blockers'], ['Late milestone forecasts', late.length, late.length ? 'bad' : '', 'milestones']]) + capacity + tableBox('Blockers to review', ['Project', 'Task', 'Owner', 'Waiting for'], waiting.map(t => [esc(projects[t.p].name), '<button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button>', esc(who(t.wait.who).name), esc(t.wait.reason)]), 'No waiting tasks.', 'blockers') + (differs.length ? tableBox('Jira assignee differs from the plan', ['Task', 'Planned for', 'Jira assignee'], differs.map(([t, x]) => ['<button class="link" data-task="' + t.id + '">' + esc((t.key ? t.key + ' ' : '') + t.name) + '</button>', esc(who(x.who).name), esc(t.assignee.name)]), '') : '') + milestones() +
+  return (requests.length ? tableBox('Time-off requests', ['Who', 'Asks to', 'When', 'Reason', ''], requests.map(r => [esc(who(r.who).name), r.remove ? 'Remove time off' : r.from != null ? 'Move time off' : 'Take time off', leaveText(r), esc(r.reason || '—'), '<button data-review-request="' + r.id + '">Review</button>']), '', 'requests') : '') + metrics([['Open capacity', loads.flat().filter(k => k === 'free').length * slotH + 'h', '', 'capacity'], ['Tasks waiting now', waiting.length, waiting.length ? 'warn' : '', 'blockers'], ['Milestones at risk or late', late.length, late.length ? 'bad' : '', 'milestones']]) + capacity + tableBox('Blockers to review', ['Project', 'Task', 'Owner', 'Waiting for'], waiting.map(t => [esc(projects[t.p].name), '<button class="link" data-task="' + t.id + '">' + esc(t.name) + '</button>', esc(who(t.wait.who).name), esc(t.wait.reason)]), 'No waiting tasks.', 'blockers') + (differs.length ? tableBox('Jira assignee differs from the plan', ['Task', 'Planned for', 'Jira assignee'], differs.map(([t, x]) => ['<button class="link" data-task="' + t.id + '">' + esc((t.key ? t.key + ' ' : '') + t.name) + '</button>', esc(who(x.who).name), esc(t.assignee.name)]), '') : '') + milestones() +
     tableBox('Recent changes', ['When', 'Who', 'What'], (state.changes ?? []).slice(0, 8).map(c => [new Date(c.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }), esc(c.by), esc(c.what)]), 'No changes yet.', 'changes', undo ? '<button id="undoLast" title="' + esc(undo) + '">↶ Undo last change</button>' : '');
 }
 /** Timesheet entries this role sees in the period. */
@@ -670,16 +717,30 @@ function reportView() {
   const bar = '<div class="report-bar">' + periodPicker() + exportButton() + (pm ? '<label>Project <select id="pmProject">' + options(me.pmProjects.filter(i => projects[i]).map(i => [i, projects[i].name]), pmProject) + '</select></label>' : '') + '</div>';
   if (pm) {
     const bySystem = systems.map((system, i) => [system, sumTime(entries.filter(e => state.tasks.find(t => t.id === e.task)?.s === i))]).filter(([, n]) => n > 0).map(([system, n], _, all) => [esc(system), hoursBar(n, Math.max(...all.map(x => x[1])), pmProject)]);
-    const current = finish(state, plan, pmProject), p = projects[pmProject];
+    const p = projects[pmProject];
     if (!p) return bar + '<p class="empty">No projects are assigned to you yet.</p>';
-    return bar + metrics([['Project hours', hours(sumTime(entries))], ['Current milestone forecast', fmt(current)], ['Requested milestone', dueText(p)]]) + tableBox('Time by system', ['System', 'Recorded time'], bySystem, 'No project hours recorded in this period.') + tableBox('Project time by ' + (byDay() ? 'day' : 'week'), [byDay() ? 'Date' : 'Week', 'Logged project time'], dailyRows(entries), '') + '<button data-page="outlook">Open project outlook →</button>';
+    return bar + metrics([['Project hours', hours(sumTime(entries))], ['Milestone forecast', span(...forecast(pmProject))], ['Requested milestone', dueText(p)]]) + tableBox('Time by system', ['System', 'Recorded time'], bySystem, 'No project hours recorded in this period.') + tableBox('Project time by ' + (byDay() ? 'day' : 'week'), [byDay() ? 'Date' : 'Week', 'Logged project time'], dailyRows(entries), '') + '<button data-page="outlook">Open project outlook →</button>';
   }
   const stats = timeStats(entries, 'Recorded hours');
   const groups = tableBox('Time by project', ['Project or category', 'Recorded time'], projectTotals(entries), 'No entries for this period.');
   if (personal) return bar + stats + groups + tableBox('Time by ' + (byDay() ? 'day' : 'week'), [byDay() ? 'Date' : 'Week', 'Recorded time'], dailyRows(entries), '');
   const perPerson = active(people).map(([p, i]) => [p, entries.filter(e => e.who === i)]), most = Math.max(0, ...perPerson.map(([, mine]) => sumTime(mine)));
   const withOff = settings.general.absenceToJira || entries.some(isOff);
-  return bar + stats + tableBox('Team time summary', ['Member', 'Project work', 'Internal work', ...(withOff ? ['Time off'] : []), 'Total'], perPerson.map(([p, mine]) => [esc(p.name), hours(sumTime(mine.filter(isProject))), hours(sumTime(mine.filter(isInternal))), ...(withOff ? [hours(sumTime(mine.filter(isOff)))] : []), hoursBar(sumTime(mine), most)]), '') + groups + teamOverTime(entries) + accuracy();
+  return bar + stats + utilization(entries) + tableBox('Team time summary', ['Member', 'Project work', 'Internal work', ...(withOff ? ['Time off'] : []), 'Total'], perPerson.map(([p, mine]) => [esc(p.name), hours(sumTime(mine.filter(isProject))), hours(sumTime(mine.filter(isInternal))), ...(withOff ? [hours(sumTime(mine.filter(isOff)))] : []), hoursBar(sumTime(mine), most)]), '') + groups + teamOverTime(entries) + accuracy();
+}
+/**
+ * Booked and recorded share of each person's working time in the period. Time off and holidays are not working time.
+ * Team total first and people in settings order: it is for balancing load, not for ranking people.
+ */
+function utilization(entries) {
+  const [d0, d1] = periodDays(), n = Math.max(0, d1 - d0 + 1) * spd, start = d0 * spd;
+  const endOfToday = M.now + (todayDay() >= 0 ? spd : 0) - start;
+  const rows = active(people).map(([p, i]) => ({ name: esc(p.name), ...slotCounts(loadSlots(start, n, i), M.now - start, endOfToday), logged: sumTime(entries.filter(e => e.who === i && !isOff(e))) }));
+  const team = rows.reduce((t, r) => ({ ...t, work: t.work + r.work, own: t.own + r.own, open: t.open + r.open, soFar: t.soFar + r.soFar, logged: t.logged + r.logged }), { name: '<b>Team</b>', work: 0, own: 0, open: 0, soFar: 0, logged: 0 });
+  const booked = r => { const all = r.work + r.own + r.open, x = Math.round(100 * (r.work + r.own) / all); return all ? pill(x + '% · ' + (x > 85 ? 'Stretched' : x >= 70 ? 'Healthy' : 'Room'), x > 85 ? 'late' : x >= 70 ? 'on-track' : 'done') : '—'; };
+  const recorded = r => hours(r.logged) + (r.soFar ? ' · ' + Math.round(100 * r.logged / (r.soFar * slotH * 60)) + '%' : '');
+  return tableBox('Utilization', ['Member', 'Working time ahead', 'Planned work', 'Private time', 'Open', 'Booked from today', 'Recorded so far'], [team, ...rows].map(r => [r.name, hrs(r.work + r.own + r.open), hrs(r.work), hrs(r.own), hrs(r.open), booked(r), recorded(r)]), '', 'utilization') +
+    '<p class="sub">Booked is planned work (with buffers) and private time as a share of working time from today to the end of the period: the plan does not keep finished work, so past days are left out. Time off and public holidays are not counted. 70–85% leaves room for interruptions and overruns; above 85% the plan has little slack. Recorded so far compares logged hours with working time up to today.</p>';
 }
 /** Estimated against actual hours of tasks finished in Relay (the history window), grouped by type, system or person. */
 function accuracy() {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createModel, normalize, applyLogOp } from '../src/shared/model.js';
+import { createModel, normalize, applyLogOp, slotCounts } from '../src/shared/model.js';
 import { estimate, percentile } from '../src/shared/estimate.js';
 import { sampleSettings, sampleState, liveSettings, GENERAL } from '../src/shared/defaults.js';
 import { mapIssues, mergeTasks, matchType, historyFromIssues } from '../src/shared/jira-map.js';
@@ -377,6 +377,45 @@ describe('service', () => {
     const { slots } = M.makeDraft(state, plan, { kind: 'timing', taskId: 'b5', stamp: '2026-12-21', prefer: other });
     expect(slots.get('b5')).toMatchObject({ who: other, start: M.cal.dayIndex('2026-12-21') * M.spd });
     expect(() => M.makeDraft(state, plan, { kind: 'timing', taskId: 'b5', stamp: '2026-12-21', prefer: nobody })).toThrow(/does not cover/);
+  });
+
+  it('counts utilization from today on, leaving out time off and days off', () => {
+    // Mon free (past), Tue time off, Wed work + buffer, Thu private + free, Fri off; 2 slots a day, today is Tue.
+    const week = ['free', 'free', 'away', 'away', 'work:0', 'buffer:0', 'protected', 'free', 'off', 'off'];
+    expect(slotCounts(week, 2, 4)).toEqual({ work: 2, own: 1, open: 1, soFar: 2 });
+    expect(slotCounts(week, 99, 10)).toEqual({ work: 0, own: 0, open: 0, soFar: 6 }); // a past period: nothing ahead
+    expect(slotCounts(week, -4, 0)).toMatchObject({ open: 3, soFar: 0 }); // a future period
+  });
+
+  it('forecasts a likely finish without buffers, never after the latest', () => {
+    const settings = sampleSettings(), M = createModel(settings, TODAY), state = sampleState(settings);
+    const plan = M.schedule(state), likely = M.likelySchedule(state);
+    const ends = settings.projects.map((p, i) => [M.finish(state, likely, i), M.finish(state, plan, i)]).filter(([, high]) => Number.isFinite(high));
+    expect(ends.some(([low, high]) => low < high)).toBe(true);
+    expect(state.tasks.find(t => t.buffer > 0)).toBeDefined(); // the plan itself is unchanged
+  });
+
+  it('applies a what-if scenario as one change, and only planning changes', () => {
+    const settings = sampleSettings(), M = createModel(settings, TODAY), state = sampleState(settings);
+    const urgent = { kind: 'urgent', p: 0, s: 0, type: 0, name: 'Hotfix', hours: 8, buffer: 0, start: 0 };
+    const leave = { kind: 'leave', who: 0, start: 20, len: 4, reason: 'Vacation' };
+    const { next, summary } = M.applyOp(state, { kind: 'scenario', list: [urgent, leave] }, { person: 0 });
+    expect(next.tasks.filter(t => t.name === 'Hotfix')).toHaveLength(1);
+    expect(next.leave.at(-1)).toMatchObject({ who: 0, start: 20, len: 4 });
+    expect(summary).toMatch(/^Scenario \(2 changes\)/);
+    expect(() => M.applyOp(state, { kind: 'scenario', list: [urgent, { kind: 'finish', taskId: 'a2', hours: 12 }] }, {})).toThrow(/outside a scenario/);
+    expect(() => M.applyOp(state, { kind: 'scenario', list: [] }, {})).toThrow(/1 to 20/);
+  });
+
+  it('lets only the team manager apply a scenario, against the current revision', async () => {
+    const svc = createService({ store: liveStore(), jira: null, today: () => TODAY });
+    const op = { kind: 'scenario', baseRev: 3, list: [{ kind: 'urgent', p: 0, s: 1, type: 1, name: 'X', hours: 8, buffer: 0, start: 0 }] };
+    expect((await svc.handle('apply', ctx('ana'), { op })).error).toMatch(/team manager/);
+    expect((await svc.handle('apply', ctx('pia'), { op })).error).toMatch(/own projects/);
+    expect((await svc.handle('apply', ctx('max'), { op: { ...op, baseRev: 2 } })).code).toBe('stale');
+    const ws = await svc.handle('apply', ctx('max'), { op });
+    expect(ws.state.tasks.filter(t => t.name === 'X')).toHaveLength(1);
+    expect(ws.undo).toMatch(/^Scenario \(1 change\)/);
   });
 
   it('remembers the estimate and who finished a task, for the accuracy report', () => {

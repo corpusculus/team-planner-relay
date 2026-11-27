@@ -9,6 +9,18 @@ export class UserError extends Error {
 
 /** Reasons a person can give for time off. Only the team manager and the person themselves see them. */
 export const LEAVE_REASONS = ['Vacation', 'Sick leave', 'Personal', 'Training', 'Other'];
+/** Changes a what-if scenario may hold: planning choices, not facts such as a finish or a blocker. */
+export const SCENARIO_KINDS = ['urgent', 'queued', 'timing', 'estimate', 'revise', 'extend', 'leave', 'private'];
+/**
+ * Utilization counts from a person's slot labels ('work:<p>', 'buffer:<p>', 'protected', 'free', 'away', 'off').
+ * Planned, private and open time count from slot `from` on: the plan does not keep finished work, so the past would look free.
+ * `soFar` is the working slots before slot `until`, to compare with the hours logged.
+ */
+export function slotCounts(slots, from, until) {
+  const kinds = list => list.map(k => k.split(':')[0]), n = (list, ...want) => list.filter(k => want.includes(k)).length;
+  const ahead = kinds(slots.slice(Math.max(0, from))), past = kinds(slots.slice(0, Math.max(0, until)));
+  return { work: n(ahead, 'work', 'buffer'), own: n(ahead, 'protected'), open: n(ahead, 'free'), soFar: n(past, 'work', 'buffer', 'protected', 'free') };
+}
 /** A timesheet entry's work is a task id, '' for internal work, or 'absence:<reason>' for time off taken. */
 export const absenceOf = task => (String(task ?? '').startsWith('absence:') ? String(task).slice(8) : null);
 /** The Jira issue that time off with this reason is logged on, or '' when none is set. */
@@ -214,6 +226,9 @@ export function createModel(settings, todayIso) {
     return slots;
   }
 
+  /** The plan if no open task needs its buffer: the likely dates. `schedule` gives the dates with buffers used. */
+  const likelySchedule = state => schedule({ ...state, tasks: state.tasks.map(t => (t.actual == null ? { ...t, buffer: 0 } : t)) });
+
   function finish(st, pl, p) { return Math.max(...st.tasks.filter(t => t.p === p).map(t => pl.get(t.id).end - 1)); }
 
   function startBlocker(state, plan, t) {
@@ -363,6 +378,18 @@ export function createModel(settings, todayIso) {
     if (op.kind === 'draft') {
       ({ next, summary } = makeDraft(state, plan, op.v || {}));
       message = 'Change applied. The schedule and milestone forecasts are updated.';
+    } else if (op.kind === 'scenario') {
+      // A what-if: several changes previewed together, applied as one change (and undone as one).
+      const list = Array.isArray(op.list) ? op.list : [], done = [];
+      if (!list.length || list.length > 20) throw new UserError('A scenario holds 1 to 20 changes.');
+      for (const v of list) {
+        if (!SCENARIO_KINDS.includes(v?.kind)) throw new UserError('Record finishes and blockers outside a scenario.');
+        const d = makeDraft(next, schedule(next), v);
+        next = d.next; done.push(d.summary);
+      }
+      // Capped: the change history is kept inside the size-limited plan key.
+      summary = ('Scenario (' + done.length + ' change' + (done.length === 1 ? '' : 's') + '): ' + done.join('; ')).slice(0, 300);
+      message = 'Scenario applied. The schedule and milestone forecasts are updated.';
     } else if (op.kind === 'start') {
       const t = state.tasks.find(t => t.id === op.taskId);
       if (!t || t.started || t.actual != null || startBlocker(state, plan, t)) throw new UserError('This task cannot start yet.');
@@ -417,6 +444,6 @@ export function createModel(settings, todayIso) {
   return {
     settings, people, projects, systems, types, cal, spd, slotH, weekSlots, now,
     fmt, span, slotLabel, hrs, leaveText, daysLate, dueText, who,
-    effectiveWork, duration, spent, remaining, statusOf, eligible, schedule, finish, startBlocker, makeDraft, applyOp, off, isHoliday, take
+    effectiveWork, duration, spent, remaining, statusOf, eligible, schedule, likelySchedule, finish, startBlocker, makeDraft, applyOp, off, isHoliday, take
   };
 }

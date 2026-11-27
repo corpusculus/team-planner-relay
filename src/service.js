@@ -292,7 +292,7 @@ function createTeamService({ store, jira, today }) {
         logChange(next, me.name, 'Reset the demo plan');
       } else {
         // Previews are calculated against a revision; refuse to apply one that is out of date.
-        if (op.kind === 'draft' && op.baseRev !== state.rev) throw new UserError('Someone else changed the plan. Review the change again.', 'stale');
+        if ((op.kind === 'draft' || op.kind === 'scenario') && op.baseRev !== state.rev) throw new UserError('Someone else changed the plan. Review the change again.', 'stale');
         ({ next, summary } = model.applyOp(state, op, me));
         logChange(next, me.name, summary);
       }
