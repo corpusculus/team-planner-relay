@@ -6,7 +6,8 @@ export const GENERAL = {
   workdayHours: 8, slotHours: 4, dayStartHour: 8, planStart: '2026-11-30',
   estimatePercentile: 70, bufferPercentile: 90, minSamples: 3, historyMonths: 12,
   storyPointsField: 'customfield_10016', blockLinkType: 'Blocks', internalIssue: '',
-  memberLeave: 'off', startStatus: '', doneStatus: '', notifyChanges: false, absenceToJira: false, absenceIssues: {}
+  memberLeave: 'off', startStatus: '', doneStatus: '', notifyChanges: false, absenceToJira: false, absenceIssues: {},
+  targetUtilization: 85, loadDefault: 40, loadProjects: ''
 };
 export const SIZES = [
   { id: 'S', name: 'Small', multiplier: 0.75 },
@@ -36,7 +37,7 @@ export function liveSettings(from) {
   const monday = new Date(); monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
   return {
     demo: false,
-    general: { ...(from?.general ?? GENERAL), planStart: monday.toISOString().slice(0, 10) },
+    general: { ...(from?.general ?? GENERAL), planStart: monday.toISOString().slice(0, 10), loadProjects: '' }, // the demo's other projects are fictional
     systems: from?.systems ?? [...SYSTEMS], types: from?.types ?? defaultTypes(),
     sizes: from?.sizes ?? SIZES, defaultSize: from?.defaultSize ?? 'M', factors: from?.factors ?? FACTORS,
     holidays: from?.holidays ?? [], projects: [], people: []
@@ -54,14 +55,16 @@ const PEOPLE = [
 export function sampleSettings() {
   const cal = calendar(GENERAL), sizeCycle = ['M', 'L', 'S', 'XL', 'M'];
   return {
-    demo: true, general: { ...GENERAL }, systems: [...SYSTEMS], types: defaultTypes(), sizes: SIZES, defaultSize: 'M', factors: FACTORS,
+    demo: true, general: { ...GENERAL, loadProjects: 'OPS, SEC' }, systems: [...SYSTEMS], types: defaultTypes(), sizes: SIZES, defaultSize: 'M', factors: FACTORS,
     holidays: ['2026-12-24', '2026-12-25', '2026-12-31', '2027-01-01'],
     // Dev works Monday to Thursday, to show part-time planning.
     people: PEOPLE.map(([name, role, skills], i) => ({ name, role, skills, access: 'member', accountId: null, pmProjects: [], archived: false, days: i === 3 ? [0, 1, 2, 3] : [0, 1, 2, 3, 4], hoursPerDay: 8 })),
     projects: NAMES.map((name, i) => ({
       name, lead: LEADS[i], back: BACKS[i], due: cal.isoOfDay(DUE[i]), jiraKey: '', jql: '', archived: false,
       sizes: Object.fromEntries(SYSTEMS.map((_, s) => [s, sizeCycle[(i + s) % 5]])),
-      factors: [i % 4 === 1 ? 'vpn' : null, i % 5 === 2 ? 'data' : null].filter(Boolean)
+      factors: [i % 4 === 1 ? 'vpn' : null, i % 5 === 2 ? 'data' : null].filter(Boolean),
+      // Three projects carry standing support work: two measured from logged hours, one fixed.
+      load: i < 2 ? 'auto' : i === 2 ? 'fixed' : 'off', loadHours: i === 2 ? 24 : 0
     }))
   };
 }
@@ -99,6 +102,14 @@ export function sampleState(settings) {
       { id: 'sample4', who: 1, task: 'a1', p: 1, date: '2026-11-30', minutes: 105, note: '' }
     ],
     leave: [{ who: 4, start: d(3), len: d(2) }],
+    // Support hours logged on Atlas over Aug–Oct; Beacon had none, so it uses the default monthly load.
+    loadHistory: { from: '2026-08-01', to: '2026-10-31', months: 3, hours: { 0: 54 }, at: '2026-11-01T06:00:00.000Z' },
+    // Fictional work in other Jira projects assigned to the team; one has no due date.
+    external: [
+      { key: 'OPS-41', summary: 'Quarterly access review', project: 'OPS', who: 1, hours: 24, to: '2026-12-18' },
+      { key: 'OPS-57', summary: 'Monitoring migration', project: 'OPS', who: 4, hours: 60, to: '2027-02-26' },
+      { key: 'SEC-9', summary: 'Security audit follow-up', project: 'SEC', who: 2, hours: 32, to: '' }
+    ],
     privateTime: settings.people.map((_, who) => ({ id: 'f' + who, who, start: d([4, 3, 4, 2, 2][who]), len: d(1), name: ['Design review notes', 'Tooling improvements', 'Data quality checks', 'Interface research', 'Maintenance backlog'][who] })),
     notes: { 0: 'The customer would like to attend the integration test. Timing is still open.' }
   };

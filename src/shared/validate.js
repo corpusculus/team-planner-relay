@@ -60,6 +60,11 @@ export function validateSettings(input, prev) {
     absenceToJira: !!gi.absenceToJira,
     absenceIssues: Object.fromEntries(['none', ...LEAVE_REASONS].map(r => [r, issueKey(gi.absenceIssues?.[r], 'Time off issue for ' + (r === 'none' ? 'no reason' : r))]).filter(([, k]) => k)),
     ignoredWorkTypes: str(gi.ignoredWorkTypes, 500, 'Ignored work types', false), // Jira work types that hold records, not work
+    // Monthly capacity: healthy up to the target; a project's monthly load without logged hours uses the default.
+    targetUtilization: num(gi.targetUtilization ?? 85, 50, 100, 'Target utilization', true),
+    loadDefault: num(gi.loadDefault ?? 40, 0, 2000, 'Default monthly load'),
+    // Other Jira projects whose open issues assigned to team members count as load (not planned by Relay).
+    loadProjects: [...new Set(String(gi.loadProjects ?? '').split(',').map(k => k.trim().toUpperCase()).filter(Boolean))].map(k => (/^[A-Z][A-Z0-9_]{0,19}$/.test(k) ? k : fail('Other Jira projects: ' + k + ' is not a project key.'))).slice(0, 50).join(', '),
     storyPointsField: /^[a-zA-Z0-9_]{0,40}$/.test(gi.storyPointsField ?? '') ? (gi.storyPointsField ?? '') : fail('Story points field must look like customfield_10016.')
   };
   const systems = arr(s.systems, 50, 'Systems').map((x, i) => str(x, 40, 'System ' + (i + 1)));
@@ -106,6 +111,8 @@ export function validateSettings(input, prev) {
       due: isoDate(p.due, label + ' due date'), lead: idx(p.lead, people, label + ' lead', true), back: idx(p.back, people, label + ' backup', true),
       sizes: Object.fromEntries(Object.entries(sizesIn).filter(([k, v]) => systems[k] !== undefined && sizeIds.has(v))),
       factors: [...new Set(arr(p.factors || [], 30, 'Factors'))].filter(f => factorIds.has(f)),
+      // Standing monthly load (support work): off, measured from logged hours, or a fixed number of hours.
+      load: ['auto', 'fixed'].includes(p.load) ? p.load : 'off', loadHours: num(p.loadHours ?? 0, 0, 2000, label + ' monthly hours'),
       archived: !!p.archived
     };
   });

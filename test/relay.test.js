@@ -5,6 +5,8 @@ import { sampleSettings, sampleState, liveSettings, GENERAL } from '../src/share
 import { mapIssues, mergeTasks, matchType, historyFromIssues, projectOf, issueFields, workTypeOf, assignWorkType } from '../src/shared/jira-map.js';
 import { validateSettings } from '../src/shared/validate.js';
 import { createService, pickDay } from '../src/service.js';
+import { capacity, monthsFrom, pastMonths, health } from '../src/shared/capacity.js';
+import { emptyState } from '../src/shared/model.js';
 
 const TODAY = '2026-11-26';
 const memStore = (init = {}) => { const m = new Map(Object.entries(init)); return { get: async k => structuredClone(m.get(k)), set: async (k, v) => void m.set(k, structuredClone(v)), claim: async k => !m.has(k) && !!m.set(k, 1), m }; };
@@ -611,6 +613,52 @@ describe('service', () => {
     expect((await svc.handle('jiraProjects', ctx('ana'), { query: 'sup' })).error).toMatch(/administrators/);
   });
 
+  it('reads other Jira projects\' open work assigned to the team at refresh, for the team manager only', async () => {
+    const store = await jiraStore(), st = await store.get('settings');
+    Object.assign(st.general, { loadProjects: 'OPS, PA' });
+    await store.set('settings', st);
+    const ops = [
+      { key: 'OPS-1', fields: { summary: 'Migration', project: { key: 'OPS' }, assignee: { accountId: 'ana' }, timeestimate: 36000, timeoriginalestimate: 72000, duedate: '2027-01-15', customfield_10015: '2026-12-01' } },
+      { key: 'OPS-2', fields: { summary: 'No estimate', project: { key: 'OPS' }, assignee: { accountId: 'ana' } } },
+      { key: 'OPS-3', fields: { summary: 'Nothing left', project: { key: 'OPS' }, assignee: { accountId: 'ana' }, timeestimate: 0, timeoriginalestimate: 7200 } },
+      { key: 'OPS-4', fields: { summary: 'Someone else', project: { key: 'OPS' }, assignee: { accountId: 'stranger' }, timeoriginalestimate: 7200 } }
+    ];
+    const queries = [];
+    const jira = { search: async ({ jql }) => (queries.push(jql), { issues: jql.includes('"OPS"') ? ops : [], isLast: true }), worklogs: async () => [] };
+    const svc = createService({ store, jira, today: () => TODAY });
+    expect((await svc.handle('refresh', ctx('max'), {})).error).toBeUndefined();
+    expect(queries.find(q => q.includes('OPS'))).toMatch(/^project in \("OPS"\) AND statusCategory != Done AND assignee in \("ana","max","pia"\)/); // PA is connected, so planned instead
+    const plan = await store.get('plan');
+    expect(plan.external).toEqual([{ key: 'OPS-1', summary: 'Migration', project: 'OPS', who: 0, hours: 10, to: '2027-01-15' }]);
+    expect(plan.externalNoEstimate).toBe(1);
+    expect((await svc.handle('getWorkspace', ctx('max'), {})).state.external).toHaveLength(1);
+    expect((await svc.handle('getWorkspace', ctx('ana'), {})).state.external).toEqual([]);
+  });
+
+  it('measures monthly loads from the hours logged per project in the last three complete months', async () => {
+    const store = await jiraStore(), st = await store.get('settings');
+    st.projects[0].load = 'auto';
+    await store.set('settings', st);
+    const queries = [];
+    // Work logs come inline with the search when an issue has 20 or fewer; this one has two, one outside the months.
+    const issue = { id: '100', key: 'PA-1', fields: { project: { key: 'PA' }, summary: 'S', worklog: { total: 2, worklogs: [
+      { id: '1', author: { accountId: 'ana' }, started: '2026-09-10T09:00:00.000+0000', timeSpentSeconds: 5 * 3600 },
+      { id: '2', author: { accountId: 'ana' }, started: '2026-11-02T09:00:00.000+0000', timeSpentSeconds: 3600 }
+    ] } } };
+    const jira = { search: async ({ jql, fields }) => (queries.push([jql, fields]), { issues: jql.includes('worklogDate') ? [issue] : [], isLast: true }), worklogs: async () => { throw new Error('not needed'); } };
+    const svc = createService({ store, jira, today: () => TODAY });
+    expect((await svc.handle('measureLoads', ctx('ana'), {})).error).toMatch(/team manager/);
+    expect((await svc.handle('measureLoads', ctx('max'), {})).error).toBeUndefined();
+    expect(queries[0][0]).toContain('worklogDate >= "2026-08-01" AND worklogDate <= "2026-10-31"');
+    expect((await store.get('plan')).loadHistory).toMatchObject({ from: '2026-08-01', to: '2026-10-31', months: 3, hours: { 0: 5 } });
+    // The scheduled job measures again once a month has closed, and not before.
+    queries.length = 0;
+    expect(await svc.autoRefresh(Date.parse('2026-11-26T10:00:00Z'))).toEqual({ refreshed: true });
+    expect(queries.filter(([q]) => q.includes('worklogDate'))).toHaveLength(0);
+    await createService({ store, jira, today: () => '2026-12-02' }).autoRefresh(Date.parse('2026-12-02T10:00:00Z'));
+    expect((await store.get('plan')).loadHistory).toMatchObject({ from: '2026-09-01', to: '2026-11-30', hours: { 0: 6 } });
+  });
+
   it('makes the admin who switches to live the first team manager', async () => {
     const store = memStore(), jira = { myself: async () => ({ displayName: 'Vera Admin' }) };
     const svc = createService({ store, jira, today: () => TODAY });
@@ -651,5 +699,61 @@ describe('availability', () => {
     const settings = sampleSettings();
     const n = normalize({ ...sampleState(settings), tasks: [{ id: 'x', after: 'y' }] }, settings);
     expect(n.tasks[0]).toEqual({ id: 'x', deps: ['y'] });
+  });
+});
+
+describe('monthly capacity', () => {
+  const setup = () => {
+    const settings = sampleSettings();
+    settings.people = settings.people.slice(0, 2).map(p => ({ ...p, skills: [0] }));
+    settings.people.push({ ...settings.people[1], name: 'Cy Spare', skills: [0] });
+    settings.projects = [
+      { ...settings.projects[0], name: 'Support', lead: 0, back: 1, load: 'fixed', loadHours: 300 },
+      { ...settings.projects[1], name: 'Orphan', lead: null, back: null, load: 'fixed', loadHours: 10 }
+    ];
+    const M = createModel(settings, '2026-12-01'), state = { ...emptyState(settings), leave: [{ who: 0, start: M.cal.dayIndex('2026-12-07') * M.spd, len: 2 * M.spd }],
+      external: [{ key: 'OPS-1', summary: 'X', who: 1, hours: 20, to: '' }] };
+    return { M, state, c: capacity(M, state, M.schedule(state), '2026-12-01', 2) };
+  };
+
+  it('takes time off and public holidays out of each person\'s gross hours', () => {
+    const { c } = setup(), [ana, ben] = c.rows, dec = 23 * 8; // 23 weekdays; 24, 25 and 31 Dec are holidays
+    expect(c.months.map(m => m.key)).toEqual(['2026-12', '2027-01']);
+    expect(ana.months[0]).toMatchObject({ gross: dec, absence: 24 + 16, net: dec - 40 });
+    expect(ben.months[0]).toMatchObject({ gross: dec, absence: 24, net: dec - 24 });
+  });
+
+  it('spreads undated other work over the horizon and gives monthly load to the lead, then the backup, up to the target', () => {
+    const { c } = setup(), [ana, ben] = c.rows, [support, orphan] = c.loads, dec = c.months[0];
+    expect(c.external[0]).toMatchObject({ provisional: true });
+    expect(ben.months[0].other).toBeCloseTo(20 * 23 / 44); // Dec and Jan weekdays: 23 + 21
+    expect(support.months[0].lead).toBeCloseTo(0.85 * 144);
+    expect(support.months[0].back).toBeCloseTo(0.85 * 160 - 20 * 23 / 44);
+    expect(support.months[0].gap).toBeCloseTo(300 - support.months[0].lead - support.months[0].back);
+    expect([ana.months[0].health, ben.months[0].health]).toEqual(['Healthy', 'Healthy']);
+    expect(orphan.months[0]).toMatchObject({ lead: 0, back: 0, gap: 10 });
+    expect(c.totals[0].gap).toBeCloseTo(support.months[0].gap + 10);
+    const text = c.insights.map(x => x.text).join('\n');
+    expect(text).toMatch(/Orphan: 20h not covered, and it has no lead\./);
+    expect(text).toMatch(/Support: .* Cy Spare has .*h free and covers Controls\./);
+    expect(text).toMatch(/no due date/);
+    expect(dec.label).toBe('Dec 2026');
+  });
+
+  it('labels health by utilization and finds past and coming months', () => {
+    expect([[0, 0], [40, 100], [85, 100], [90, 100], [101, 100]].map(([p, n]) => health(p, n, 85))).toEqual(['No capacity', 'Underused', 'Healthy', 'Stretched', 'Over']);
+    expect(pastMonths('2027-01-15')).toEqual({ from: '2026-10-01', to: '2026-12-31' });
+    expect(monthsFrom('2026-11-27', 3).map(m => m.to)).toEqual(['2026-11-30', '2026-12-31', '2027-01-31']);
+  });
+
+  it('validates capacity settings', () => {
+    const s = sampleSettings();
+    Object.assign(s.general, { targetUtilization: 80, loadProjects: 'ops, sec' });
+    Object.assign(s.projects[0], { load: 'fixed', loadHours: 12 });
+    const v = validateSettings(s, s);
+    expect(v.general).toMatchObject({ targetUtilization: 80, loadProjects: 'OPS, SEC', loadDefault: 40 });
+    expect(v.projects[0]).toMatchObject({ load: 'fixed', loadHours: 12 });
+    expect(v.projects[3].load).toBe('off');
+    expect(() => validateSettings({ ...s, general: { ...s.general, loadProjects: 'not a key' } }, s)).toThrow(/not a project key/);
   });
 });

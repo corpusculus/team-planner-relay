@@ -41,7 +41,7 @@ export function calendar(general) {
 }
 
 export function emptyState(settings) {
-  return { rev: 0, unit: unitOf(settings), tasks: [], leave: [], privateTime: [], fixed: [], leaveRequests: [], notes: {}, logs: [], logMonths: [], completed: [], unmapped: [], ops: [], changes: [] };
+  return { rev: 0, unit: unitOf(settings), tasks: [], leave: [], privateTime: [], fixed: [], leaveRequests: [], notes: {}, logs: [], logMonths: [], completed: [], unmapped: [], ops: [], changes: [], external: [] };
 }
 const unitOf = settings => ({ slotHours: settings.general.slotHours, workdayHours: settings.general.workdayHours });
 
@@ -109,9 +109,9 @@ export function createModel(settings, todayIso) {
   const holidays = new Set((settings.holidays ?? []).filter(cal.isWeekday).map(iso => cal.dayIndex(iso)));
   const isHoliday = slot => holidays.has(Math.floor(slot / spd));
   /** True when person w does not work in this slot: public holiday, a weekday they don't work, or past their hours that day. */
-  function off(w, slot) {
+  function off(w, slot, withHolidays = true) {
     const d = Math.floor(slot / spd), p = people[w];
-    return holidays.has(d) || !(p?.days ?? [0, 1, 2, 3, 4]).includes(((d % 5) + 5) % 5) || slot - d * spd >= Math.ceil((p?.hoursPerDay ?? g.workdayHours) / slotH);
+    return (withHolidays && holidays.has(d)) || !(p?.days ?? [0, 1, 2, 3, 4]).includes(((d % 5) + 5) % 5) || slot - d * spd >= Math.ceil((p?.hoursPerDay ?? g.workdayHours) / slotH);
   }
   /** The first n slots person w works, from `start` on. */
   function take(w, start, n) {

@@ -4,6 +4,7 @@ import { estimate, toSlots } from '../../src/shared/estimate.js';
 import { call, openIssue, isLocal, session } from '../common/backend.js';
 import { $, esc, options, modal } from '../common/ui.js';
 import { rulesHtml } from '../common/rules.js';
+import { capacity, slotKinds, health } from '../../src/shared/capacity.js';
 
 const colors = [['#248275', '#d8eee8', '#184e46'], ['#7460a8', '#e9e3f5', '#493c69'], ['#ad7331', '#f5e9d4', '#6e4d24'], ['#4676a4', '#dfeaf5', '#304e70'], ['#aa626b', '#f6e4e5', '#6b3c44'], ['#68813f', '#e8efd9', '#455827'],
   ['#a04f93', '#f3e1ef', '#662f5d'], ['#2f8fa3', '#d9eef2', '#1d5a67'], ['#b5553c', '#f7e2db', '#74331f'], ['#5560b8', '#e1e4f7', '#353d7a'], ['#4d9150', '#deefdd', '#2d5c30'], ['#9c8a1f', '#f3efcf', '#5f5410'],
@@ -18,7 +19,7 @@ let spd, slotH, weekSlots, timeInJira = false;
 // View state
 let role = 'member', pmProject = 0, member = 2;
 try { const last = sessionStorage.getItem('relay.preview.role'); if (['member', 'team', 'pm'].includes(last)) role = last; const w = sessionStorage.getItem('relay.preview.member'); if (w !== null) member = Number(w); } catch {}
-let accuracyBy = 'type', period = null, pmCal = 'all', personFilter = 'all', tab = role === 'pm' ? 'outlook' : 'home', filter = 'all', showAll = false, draft = null, formValues = null, busy = false, booted = false;
+let horizon = 6, capMonth = 0, accuracyBy = 'type', period = null, pmCal = 'all', personFilter = 'all', tab = role === 'pm' ? 'outlook' : 'home', filter = 'all', showAll = false, draft = null, formValues = null, busy = false, booted = false;
 
 function useWorkspace(ws) {
   settings = ws.settings; today = ws.today; me = ws.me; state = ws.state;
@@ -150,12 +151,13 @@ const pageInfo = {
   queue: ['Work queue', 'See what is underway, what can start next, and what needs a decision.'],
   schedule: ['Team calendar', 'Assignments, protected time, and buffers across the team.'],
   coverage: ['Project coverage', 'Primary contacts, backups, and the systems each person covers.'],
+  capacity: ['Capacity', 'Who has room each month, who is overloaded, and what nobody covers.'],
   outlook: ['Project outlook', 'Milestone forecasts, agreed starts, and notes shared with the team.']
 };
 
 function render() {
   const pm = role === 'pm', personal = role === 'member';
-  const pages = personal ? ['home', 'schedule', 'sheet', 'report'] : pm ? ['outlook', 'schedule', 'report'] : ['home', 'queue', 'schedule', 'coverage', 'report'];
+  const pages = personal ? ['home', 'schedule', 'sheet', 'report'] : pm ? ['outlook', 'schedule', 'report'] : ['home', 'queue', 'schedule', 'coverage', 'capacity', 'report'];
   if (!pages.includes(tab)) tab = pages[0];
   $('roleBox').hidden = !me.demo; $('role').value = role;
   $('teamPick').hidden = teams.length < 2; $('teamPick').innerHTML = options(teams.map(t => [t.id, t.name]), session.team);
@@ -166,7 +168,7 @@ function render() {
   $('settingsLink').hidden = !isLocal && (me.demo || role !== 'team');
   $('reset').hidden = !(me.demo && role === 'team');
   $('footnote').textContent = me.demo ? 'Demo portfolio · Fictional data · Switch to live mode in Relay settings' : 'Live plan · ' + (state.refreshedAt ? 'Jira refreshed ' + new Date(state.refreshedAt).toLocaleString('en-GB') : 'Not refreshed from Jira yet') + (state.unmapped.length && role === 'team' ? ' · ' + state.unmapped.length + ' Jira issues need mapping (see settings)' : '');
-  $('simulate').hidden = !(role === 'team' && ['home', 'queue', 'schedule', 'coverage'].includes(tab) || personal && ['home', 'sheet', 'schedule'].includes(tab));
+  $('simulate').hidden = !(role === 'team' && ['home', 'queue', 'schedule', 'coverage', 'capacity'].includes(tab) || personal && ['home', 'sheet', 'schedule'].includes(tab));
   $('simulate').textContent = personal ? (tab === 'schedule' ? 'Protect time' : '＋ Log time') : scenario && role === 'team' ? '＋ Add task to what-if' : '＋ Add task';
   $('whatIf').hidden = $('simulate').hidden || role !== 'team' || !!scenario;
   const ownLeave = personal && tab === 'schedule' && leaveMode(settings.general) !== 'off';
@@ -181,7 +183,7 @@ function render() {
     if (k === 'home') btn.textContent = personal ? 'My work' : 'Overview';
     btn.classList.toggle('active', k === tab); btn.setAttribute('aria-current', k === tab ? 'page' : 'false');
   }
-  const views = { home: personal ? memberHome : managerHome, queue: queueView, schedule: () => (role === 'pm' ? pmCalendarHeader() : board()), coverage, outlook: pmView, sheet: timesheetView, report: reportView };
+  const views = { home: personal ? memberHome : managerHome, queue: queueView, schedule: () => (role === 'pm' ? pmCalendarHeader() : board()), coverage, capacity: capacityView, outlook: pmView, sheet: timesheetView, report: reportView };
   $('view').innerHTML = (scenario && role === 'team' ? scenarioPanel() : '') + views[tab]();
   // Phones show table rows as labelled blocks (CSS .stack); labels come from the header cells.
   for (const table of $('view').querySelectorAll('table.data:not(.load-table)')) {
@@ -258,7 +260,9 @@ function milestones() {
   return '<section class="panel" id="milestones"><div class="section-head"><div><h2>Project milestones</h2><p>Likely finish of each project’s planned work, and the latest if every buffer is used.</p></div><select id="filter" aria-label="Filter milestones by project"><option value="all">All projects</option>' + active(projects).map(([p, i]) => '<option value="' + i + '" ' + (filter === String(i) ? 'selected' : '') + '>' + esc(p.name) + '</option>').join('') + '</select></div><div class="scroll"><table class="data"><thead><tr><th>Project</th><th>Primary</th><th>Requested by</th><th>Forecast</th><th>Outlook</th></tr></thead><tbody>' + list.map(i => { const [low, d] = forecast(i), p = projects[i]; return '<tr><td>' + projectLink(i) + '</td><td>' + esc(who(p.lead).short) + '</td><td>' + dueText(p) + '</td><td>' + span(low, d) + '</td><td>' + outlookPill(d, p, low) + '</td></tr>'; }).join('') + '</tbody></table></div>' + (indices.length > 5 ? '<div class="foot"><span>' + list.length + ' of ' + indices.length + ' projects</span><button class="link" id="more">' + (showAll ? 'Show fewer' : 'Show all projects') + '</button></div>' : '') + '</section>';
 }
 function coverage() {
-  return '<section class="panel"><div class="section-head"><div><h2>Project contacts</h2><p>Select a project for system-level coverage and scheduled tasks.</p></div></div><div class="scroll"><table class="data"><thead><tr><th>Project</th><th>Primary</th><th>Backup</th><th>Systems</th></tr></thead><tbody>' + active(projects).map(([p, i]) => '<tr><td>' + projectLink(i) + '</td><td>' + esc(who(p.lead).name) + '</td><td>' + (p.back === null ? 'No backup' : esc(who(p.back).name)) + '</td><td>' + p.systems.length + '</td></tr>').join('') + '</tbody></table></div></section>';
+  const works = p => ((p.days ?? [0, 1, 2, 3, 4]).length === 5 ? 'Mon–Fri' : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].filter((_, k) => p.days.includes(k)).join(', ')) + ' · ' + (p.hoursPerDay ?? settings.general.workdayHours) + 'h a day';
+  const skills = p => p.skills.map(k => esc(systems[k])).join(', ') || '—';
+  return tableBox('Team and skills', ['Name', 'Job title', 'Works', 'Skills'], active(people).map(([p]) => [esc(p.name), esc(p.role || '—'), works(p), skills(p)]), 'No team members yet.') + '<section class="panel"><div class="section-head"><div><h2>Project contacts</h2><p>Select a project for system-level coverage and scheduled tasks.</p></div></div><div class="scroll"><table class="data"><thead><tr><th>Project</th><th>Primary</th><th>Backup</th><th>Systems</th></tr></thead><tbody>' + active(projects).map(([p, i]) => '<tr><td>' + projectLink(i) + '</td><td>' + esc(who(p.lead).name) + '</td><td>' + (p.back === null ? 'No backup' : esc(who(p.back).name)) + '</td><td>' + p.systems.length + '</td></tr>').join('') + '</tbody></table></div></section>';
 }
 
 function queueView() {
@@ -459,6 +463,8 @@ document.addEventListener('change', e => {
   }
   if (id === 'pmCal') { pmCal = e.target.value; render(); }
   if (id === 'accuracyBy') { accuracyBy = e.target.value; render(); }
+  if (id === 'horizon') { horizon = Number(e.target.value); render(); }
+  if (id === 'capMonth') { capMonth = Number(e.target.value); render(); }
   if (id === 'teamPick') {
     session.team = e.target.value;
     try { sessionStorage.setItem('relay.team', session.team); } catch {}
@@ -633,24 +639,7 @@ function memberHome() {
   return '<div class="dash-pair"><section class="focus-card' + (focus?.wait ? ' tone-waiting' : '') + '"><div class="focus-label">' + (focus?.started ? 'In progress' : focus?.wait ? 'Waiting' : 'Next assignment') + '</div>' + focusCard + '</section><section class="panel summary-card"><div class="section-head"><h2>My timesheet</h2><small>' + periodLabel() + '</small></div><div class="time-large">' + hours(sumTime(entries)) + '</div><div class="sub">Recorded in this period</div><button class="link" data-page="sheet">Open timesheet →</button></section></div>' + tableBox('My other assignments', ['Project', 'Task and system', 'Forecast', 'State'], rows, 'Your queue is clear.');
 }
 /** One entry per slot from `start`: 'work:<project>', 'buffer:<project>', protected, away, off or free. */
-function loadSlots(start, count, person) {
-  const end = start + count, slots = Array(count).fill('free');
-  function put(a, b, k) { for (let i = Math.max(start, a); i < Math.min(b, end); i++) slots[i - start] = k; }
-  for (const l of state.leave.filter(l => l.who === person)) put(l.start, l.start + l.len, 'away');
-  for (const b of state.privateTime.filter(b => b.who === person)) put(b.start, b.start + b.len, 'protected');
-  for (const t of state.tasks) {
-    for (const h of t.history || []) if (h.who === person) put(h.start, h.end, 'work:' + t.p);
-    const x = plan.get(t.id); if (x.who !== person) continue;
-    if (Number.isFinite(x.start)) {
-      const until = x.start + Math.max(1, effectiveWork(t) - spent(t));
-      put(x.start, until, 'work:' + t.p); put(until, x.end, 'buffer:' + t.p);
-    } else {
-      const f = state.fixed.find(f => f.taskId === t.id);
-      if (f && t.firstStart == null) put(f.start, f.start + duration(t), 'work:' + t.p);
-    }
-  }
-  return slots.map((k, i) => (off(person, start + i) ? 'off' : k));
-}
+const loadSlots = (start, count, person) => slotKinds(M, state, plan, person, start, count);
 /** Text when Jira says someone else is assigned than the person Relay plans; '' when they agree or nobody is assigned. */
 function assigneeNote(t, x) {
   if (!t.assignee || !Number.isFinite(x?.start)) return '';
@@ -678,13 +667,16 @@ function visibleEntries() {
 const exportButton = () => '<button data-export>Export CSV</button>';
 /** Download the visible entries as CSV for invoicing or payroll. */
 function exportCsv() {
-  // A leading = + - @ would make spreadsheets run the cell as a formula.
-  const cell = v => '"' + String(v ?? '').replace(/^[=+\-@]/, "'$&").replace(/"/g, '""') + '"';
   const rows = [['Date', 'Person', 'Project', 'Work', 'Hours', 'Comment'], ...visibleEntries().sort((a, b) => a.date.localeCompare(b.date)).map(e => {
     const t = state.tasks.find(t => t.id === e.task);
     return [e.date, people[e.who]?.name ?? '', isOff(e) ? 'Time off' : e.p != null ? projects[e.p]?.name ?? '' : 'Internal work', t ? t.name : isOff(e) ? e.absence || 'Time off' : e.label ?? '', (e.minutes / 60).toFixed(2), e.note ?? ''];
   })];
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([rows.map(r => r.map(cell).join(',')).join('\r\n')], { type: 'text/csv' })), download: 'timesheet-' + period.from + '_' + period.to + '.csv' });
+  downloadCsv(rows, 'timesheet-' + period.from + '_' + period.to + '.csv');
+}
+function downloadCsv(rows, name) {
+  // A leading = + - @ would make spreadsheets run the cell as a formula.
+  const cell = v => '"' + String(v ?? '').replace(/^[=+\-@]/, "'$&").replace(/"/g, '""') + '"';
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([rows.map(r => r.map(cell).join(',')).join('\r\n')], { type: 'text/csv' })), download: name });
   a.click();
   URL.revokeObjectURL(a.href);
 }
@@ -741,11 +733,59 @@ function utilization(entries) {
   const endOfToday = M.now + (todayDay() >= 0 ? spd : 0) - start;
   const rows = active(people).map(([p, i]) => ({ name: esc(p.name), ...slotCounts(loadSlots(start, n, i), M.now - start, endOfToday), logged: sumTime(entries.filter(e => e.who === i && !isOff(e))) }));
   const team = rows.reduce((t, r) => ({ ...t, work: t.work + r.work, own: t.own + r.own, open: t.open + r.open, soFar: t.soFar + r.soFar, logged: t.logged + r.logged }), { name: '<b>Team</b>', work: 0, own: 0, open: 0, soFar: 0, logged: 0 });
-  const booked = r => { const all = r.work + r.own + r.open, x = Math.round(100 * (r.work + r.own) / all); return all ? pill(x + '% · ' + (x > 85 ? 'Stretched' : x >= 70 ? 'Healthy' : 'Room'), x > 85 ? 'late' : x >= 70 ? 'on-track' : 'done') : '—'; };
+  const booked = r => { const all = r.work + r.own + r.open, x = Math.round(100 * (r.work + r.own) / all); return all ? healthPill(health(x, all, target()), x + '% · ') : '—'; };
   const recorded = r => hours(r.logged) + (r.soFar ? ' · ' + Math.round(100 * r.logged / (r.soFar * slotH * 60)) + '%' : '');
   return tableBox('Utilization', ['Member', 'Working time ahead', 'Planned work', 'Private time', 'Open', 'Booked from today', 'Recorded so far'], [team, ...rows].map(r => [r.name, hrs(r.work + r.own + r.open), hrs(r.work), hrs(r.own), hrs(r.open), booked(r), recorded(r)]), '', 'utilization') +
-    '<p class="sub">Booked is planned work (with buffers) and private time as a share of working time from today to the end of the period: the plan does not keep finished work, so past days are left out. Time off and public holidays are not counted. 70–85% leaves room for interruptions and overruns; above 85% the plan has little slack. Recorded so far compares logged hours with working time up to today.</p>';
+    '<p class="sub">Booked is planned work (with buffers) and private time as a share of working time from today to the end of the period: the plan does not keep finished work, so past days are left out. Time off and public holidays are not counted. Healthy is 50–' + target() + '%, which leaves room for interruptions and overruns; above ' + target() + '% the plan has little slack. Recorded so far compares logged hours with working time up to today.</p>';
 }
+const target = () => settings.general.targetUtilization ?? 85;
+const HEALTH_KIND = { Underused: 'done', Healthy: 'on-track', Stretched: 'at-risk', Over: 'late', 'No capacity': 'waiting' };
+const healthPill = (h, prefix = '') => pill(prefix + h, HEALTH_KIND[h]);
+const h1 = x => (Math.round(x * 10) / 10).toLocaleString('en-GB') + 'h';
+/** Capacity of the current plan, or of the open what-if so its effect on the months shows. */
+const capacityNow = () => (scenario ? capacity(M, scenario.next, scenario.slots, today, horizon) : capacity(M, state, plan, today, horizon));
+
+/** Team manager: per month, who has room, who is overloaded, and which monthly loads nobody covers. */
+function capacityView() {
+  const c = capacityNow(), sum = f => c.totals.reduce((n, t) => n + f(t), 0), net = sum(t => t.net), demand = sum(t => t.demand), gap = sum(t => t.gap);
+  const stretched = c.rows.filter(r => r.months.some(m => m.health === 'Over' || m.health === 'Stretched')).length;
+  if (capMonth >= c.months.length) capMonth = 0;
+  const bar = '<div class="report-bar"><label>Horizon <select id="horizon">' + options([[3, '3 months'], [6, '6 months'], [12, '12 months']], horizon) + '</select></label>' + (scenario ? pill('Showing the what-if', 'at-risk') : '') + '<button data-export-capacity>Export CSV</button>' + (me.demo ? '' : '<button id="measureLoads">Measure monthly loads</button>') + '</div>';
+  const kpis = metrics([['Available hours', h1(net)], ['Needed hours', h1(demand), demand > net ? 'bad' : '', 'cvd'], ['Not covered', h1(gap), gap >= 0.05 ? 'bad' : '', 'loads'], ['People stretched or over', stretched, stretched ? 'warn' : '', 'heatmap']]);
+
+  // Available against needed hours per month: paired bars on one scale, numbers beside them.
+  const most = Math.max(1, ...c.totals.flatMap(t => [t.net, t.demand])), w = x => (100 * x / most).toFixed(1) + '%';
+  const chart = '<section class="panel" id="cvd"><div class="section-head"><h2>Available and needed hours</h2><div class="legend"><span><i class="swatch cap"></i>Available</span><span><i class="swatch dem"></i>Needed</span></div></div><div class="content cvd">' +
+    c.months.map((m, k) => { const t = c.totals[k], tip = m.label + ' · available ' + h1(t.net) + ' · needed ' + h1(t.demand); return '<div class="cvd-row" title="' + esc(tip) + '"><span>' + m.label + '</span><div class="cvd-bars" role="img" aria-label="' + esc(tip) + '"><i class="cap" style="width:' + w(t.net) + '"></i><i class="dem" style="width:' + w(t.demand) + '"></i></div><small>' + h1(t.net) + ' / ' + h1(t.demand) + (t.demand > t.net ? ' · <b class="late">' + h1(t.demand - t.net) + ' short</b>' : '') + '</small></div>'; }).join('') + '</div></section>';
+  const tone = { bad: ['Act', 'late'], warn: ['Review', 'at-risk'], info: ['Note', 'done'] };
+  const insights = '<section class="panel" id="insights"><div class="section-head"><h2>What needs attention</h2></div><div class="content">' + (c.insights.map(x => '<p class="insight">' + pill(...tone[x.tone]) + esc(x.text) + '</p>').join('') || '<p class="empty">Nothing: everyone is within ' + c.target + '% and every monthly load is covered.</p>') + '</div></section>';
+
+  // Health is written in each cell, so it never rests on colour alone. A cell opens that month below.
+  const heat = '<section class="panel" id="heatmap"><div class="section-head"><div><h2>Utilization by month</h2><p>Healthy is 50–' + c.target + '%. Select a month for details.</p></div></div><div class="scroll"><table class="data heat"><thead><tr><th>Member</th>' + c.months.map(m => '<th>' + m.label + '</th>').join('') + '</tr></thead><tbody>' +
+    c.rows.map(r => '<tr><td>' + esc(r.name) + '</td>' + r.months.map((m, k) => '<td><button class="heat-cell h-' + m.health.toLowerCase().replace(/ /g, '-') + '" data-cap-month="' + k + '" title="' + esc(r.name + ' · ' + c.months[k].label + ' · ' + h1(m.total) + ' of ' + h1(m.net)) + '"><b>' + (m.net ? Math.round(m.pct) + '%' : '—') + '</b><small>' + m.health + '</small></button></td>').join('') + '</tr>').join('') + '</tbody></table></div></section>';
+
+  const details = tableBox('Month details', ['Member', 'Available', 'Planned work', 'Other Jira work', 'Monthly loads', 'Used'],
+    c.rows.map(r => { const x = r.months[capMonth]; return [esc(r.name), h1(x.net) + (x.absence ? '<small class="meta-line">after ' + h1(x.absence) + ' off</small>' : ''), h1(x.planned + x.private), h1(x.other), h1(x.support), healthPill(x.health, (x.net ? Math.round(x.pct) + '% · ' : ''))]; }),
+    'No team members yet.', 'details', '<label class="sub">Month <select id="capMonth">' + options(c.months.map((m, k) => [k, m.label]), capMonth) + '</select></label>');
+
+  const loads = tableBox('Monthly loads', ['Project', 'Per month', 'Covered by', 'Not covered'],
+    c.loads.map(l => { const gp = l.months.reduce((n, m) => n + m.gap, 0); return [projectLink(l.p), h1(l.hours) + '<small class="meta-line">' + esc(l.source) + '</small>', [l.lead, l.back].filter(x => x != null).map(x => esc(who(x).name)).join(', then ') || '<span class="late">Nobody</span>', gp >= 0.05 ? '<b class="late">' + h1(gp) + '</b>' : '—']; }),
+    'No monthly loads. For support work, set a project’s Monthly load in Relay settings → Projects.', 'loads') +
+    (c.loads.length ? '<p class="sub">The lead takes a load first, then the backup, each up to ' + c.target + '%. Loads do not move ticket dates.</p>' : '');
+
+  const other = settings.general.loadProjects ? tableBox('Other Jira work', ['Member', 'Issue', 'Hours left', 'Due'],
+    c.external.map(e => [esc(who(e.who).name), '<button class="link" data-issue="' + esc(e.key) + '">' + esc(e.key) + '</button> ' + esc(e.summary), h1(e.hours), e.provisional ? pill('No due date', 'waiting') : e.overdue ? pill('Overdue', 'late') : fmtIso(e.to)]),
+    'No open issues in ' + esc(settings.general.loadProjects) + ' are assigned to the team.', 'other') : '';
+  return bar + kpis + chart + insights + heat + details + loads + other;
+}
+const fmtIso = d => new Date(d + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+function exportCapacity() {
+  const c = capacityNow(), r1 = x => (Math.round(x * 10) / 10).toFixed(1);
+  downloadCsv([['Month', 'Member', 'Gross h', 'Absence h', 'Net h', 'Planned h', 'Private h', 'Other Jira h', 'Monthly loads h', 'Total h', 'Utilization %', 'Remaining h', 'Over h', 'Health'],
+    ...c.months.flatMap((m, k) => c.rows.map(r => { const x = r.months[k]; return [m.key, r.name, r1(x.gross), r1(x.absence), r1(x.net), r1(x.planned), r1(x.private), r1(x.other), r1(x.support), r1(x.total), x.net ? Math.round(x.pct) : '', r1(x.remaining), r1(x.over), x.health]; }))],
+  'capacity-' + c.months[0].key + '_' + c.months.at(-1).key + '.csv');
+}
+
 /** Estimated against actual hours of tasks finished in Relay (the history window), grouped by type, system or person. */
 function accuracy() {
   const done = state.completed.filter(c => c.est > 0), name = { type: c => types[c.type]?.name, system: c => systems[c.s], person: c => people[c.who]?.name }[accuracyBy];
@@ -799,6 +839,9 @@ document.addEventListener('click', event => {
   if (b.dataset.page) { tab = b.dataset.page; render(); }
   if (b.dataset.jump) document.getElementById(b.dataset.jump)?.scrollIntoView();
   if (b.hasAttribute('data-export')) exportCsv();
+  if (b.hasAttribute('data-export-capacity')) exportCapacity();
+  if (b.dataset.capMonth !== undefined) { capMonth = Number(b.dataset.capMonth); render(); document.getElementById('details')?.scrollIntoView(); }
+  if (b.id === 'measureLoads') measureLoads();
   if (b.dataset.push) pushToJira(b.dataset.pushTask, b.dataset.push);
   if (role !== 'member') return;
   if (b.dataset.recordOff) recordTimeOff([JSON.parse(b.dataset.recordOff)]);
@@ -851,6 +894,13 @@ function reviewRequest(id) {
     catch (e) { impact = 'This request can no longer be approved: ' + e.message; }
   }
   modal('Time-off request', '<p class="note"><b>' + esc(who(r.who).name) + ' · ' + (r.remove ? 'Remove time off' : r.from != null ? 'Move time off' : esc(r.reason || 'Time off')) + '</b><br>' + leaveText(r) + (r.from != null && !r.remove ? '<br><small>Currently from ' + fmt(r.from) + '</small>' : '') + '</p><p>' + esc(impact) + '</p><div class="actions"><button data-dismiss>Later</button><button data-decline-request="' + r.id + '">Decline</button><button class="primary" data-approve-request="' + r.id + '">Approve</button></div>');
+}
+async function measureLoads() {
+  if (busy) return;
+  busy = true; announce('Reading logged hours from Jira…');
+  try { useWorkspace(await call('measureLoads', { range: periodRange() })); render(); announce('Monthly loads measured from the hours logged in the last 3 months.'); }
+  catch (e) { announce(''); modal('Monthly loads were not measured', '<p>' + esc(e.message) + '</p><div class="actions"><button data-dismiss>Close</button></div>'); }
+  finally { busy = false; }
 }
 async function runUndo() {
   if (busy) return;

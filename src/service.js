@@ -6,11 +6,14 @@ import { createModel, normalize, emptyState, applyLogOp, leaveMode, absenceOf, a
 import { sampleSettings, sampleState, liveSettings } from './shared/defaults.js';
 import { validateSettings } from './shared/validate.js';
 import { mapIssues, historyFromIssues, mergeTasks, issueFields, projectOf, splitFields, matchValues, ignored } from './shared/jira-map.js';
+import { pastMonths, LOAD_MONTHS } from './shared/capacity.js';
 
 const MEMBER_OPS = new Set(['start', 'log', 'deleteLog', 'releasePrivate', 'releaseLeave', 'requestLeave', 'cancelRequest', 'draft']);
 const MEMBER_DRAFTS = new Set(['private', 'leave', 'pause', 'resume', 'estimate', 'finish', 'revise']);
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const monthOf = iso => String(iso).slice(0, 7);
+/** Every 'YYYY-MM' from the month of `from` to the month of `to`. */
+const monthsBetween = (from, to) => { const out = []; for (let [y, m] = from.split('-').map(Number); `${y}-${String(m).padStart(2, '0')}` <= monthOf(to); m === 12 ? (y++, m = 1) : m++) out.push(`${y}-${String(m).padStart(2, '0')}`); return out; };
 const utcToday = () => new Date().toISOString().slice(0, 10);
 const isoPlus = (iso, days) => new Date(Date.parse(iso + 'T00:00:00Z') + days * DAY_MS).toISOString().slice(0, 10);
 
@@ -95,7 +98,7 @@ function createTeamService({ store, jira, today }) {
   const liveTime = settings => !settings.demo && !!jira;
 
   /** Work logged in Jira by team members in the range, on connected projects and the internal-work issue. */
-  async function jiraWorklogs(settings, state, range) {
+  async function jiraWorklogs(settings, state, range, limit = 500) {
     const keys = settings.projects.filter(p => p.jiraKey && !p.archived).map(p => '"' + p.jiraKey + '"'), internal = settings.general.internalIssue;
     // Time-off issues, by key: the first reason that uses each key names it.
     const absence = new Map();
@@ -103,13 +106,15 @@ function createTeamService({ store, jira, today }) {
     const single = [internal, ...absence.keys()].filter(Boolean).map(k => '"' + k + '"');
     if (!keys.length && !single.length) return [];
     const scope = [keys.length && 'project in (' + keys.join(',') + ')', single.length && 'key in (' + single.join(',') + ')'].filter(Boolean).join(' OR ');
-    const issues = await searchAll('(' + scope + ') AND worklogDate >= "' + range.from + '" AND worklogDate <= "' + range.to + '"', ['project', 'summary', 'components', ...splitFields(settings)], 500);
+    // Search results carry up to 20 work logs per issue; only issues with more need their own request.
+    const issues = await searchAll('(' + scope + ') AND worklogDate >= "' + range.from + '" AND worklogDate <= "' + range.to + '"', ['project', 'summary', 'components', 'worklog', ...splitFields(settings)], limit);
     const person = new Map(settings.people.map((p, i) => [p.accountId, i]));
     const tasks = new Map(state.tasks.map(t => [t.id, t])), after = Date.parse(range.from) - DAY_MS, before = Date.parse(range.to) + 2 * DAY_MS, out = [];
     // shortcut: one request per issue with time in the range, 8 at a time; fine for one team, use /worklog/updated for large sites.
     for (let i = 0; i < issues.length; i += 8) await Promise.all(issues.slice(i, i + 8).map(async issue => {
       const isInternal = issue.key === internal, off = absence.has(issue.key) && !isInternal ? absence.get(issue.key) : null;
-      for (const w of await jira.worklogs(issue.id, after, before)) {
+      const inline = issue.fields?.worklog, all = inline?.worklogs && inline.total <= inline.worklogs.length ? inline.worklogs : await jira.worklogs(issue.id, after, before);
+      for (const w of all) {
         const who = person.get(w.author?.accountId), date = String(w.started).slice(0, 10);
         if (who === undefined || date < range.from || date > range.to) continue;
         out.push({
@@ -150,9 +155,9 @@ function createTeamService({ store, jira, today }) {
   }
 
   /** Timesheet entries in a date range: Jira work logs in live mode, Relay storage in the demo. */
-  async function timesheets(settings, state, range) {
-    if (liveTime(settings)) return jiraWorklogs(settings, state, range);
-    const months = [...new Set([monthOf(range.from), monthOf(range.to)])];
+  async function timesheets(settings, state, range, limit) {
+    if (liveTime(settings)) return jiraWorklogs(settings, state, range, limit);
+    const months = monthsBetween(range.from, range.to);
     return (await readLogs(months.filter(m => state.logMonths.includes(m)))).filter(e => e.date >= range.from && e.date <= range.to);
   }
 
@@ -166,7 +171,7 @@ function createTeamService({ store, jira, today }) {
     s.ops = [];
     s.privateTime = s.privateTime.map(b => (me.access === 'member' && b.who === me.person ? b : { ...b, name: 'Private time' }));
     if (me.access === 'team') s.logs = s.logs.map(e => ({ ...e, note: '' }));
-    if (me.access !== 'team') s.changes = [];
+    if (me.access !== 'team') { s.changes = []; s.external = []; s.loadHistory = null; } // other Jira work is the team manager's view
     // Why someone is away (sick leave, say) is for the team manager and the person only.
     s.leave = s.leave.map(l => (me.access === 'team' || l.who === me.person ? l : { ...l, reason: '' }));
     if (me.access !== 'team') s.leaveRequests = me.access === 'member' ? s.leaveRequests.filter(r => r.who === me.person) : [];
@@ -267,11 +272,48 @@ function createTeamService({ store, jira, today }) {
     };
     const orphans = open.filter(x => x.p === undefined && !seen.has(x.issue.id) && !ignored(settings, x.issue.fields?.issuetype?.name)).map(orphan);
     const mapped = mapIssues(unique, settings, state.completed, day), tasks = mapped.tasks, unmapped = [...orphans, ...mapped.unmapped];
-    const next = mergeTasks({ ...state, unmapped: unmapped.slice(0, 200), unmappedTotal: unmapped.length, refreshedAt: new Date().toISOString() }, tasks);
+    const other = await readOther(settings);
+    const next = mergeTasks({ ...state, ...other, unmapped: unmapped.slice(0, 200), unmappedTotal: unmapped.length, refreshedAt: new Date().toISOString() }, tasks);
     createModel(settings, day).schedule(next);
     logChange(next, by, 'Refreshed from Jira: ' + tasks.length + ' issues planned, ' + unmapped.length + ' need mapping');
     await savePlan(next, settings, day, state.rev);
   }
+
+  /** Keys of the other Jira projects whose work counts as load; a connected project is planned, so it is left out here. */
+  const otherKeys = settings => {
+    const connected = new Set(activeProjects(settings).map(p => p.jiraKey));
+    return String(settings.general.loadProjects ?? '').split(',').map(k => k.trim()).filter(k => k && !connected.has(k));
+  };
+  /** Open issues of the other Jira projects assigned to team members: load Relay counts but does not plan. */
+  async function readOther(settings) {
+    const keys = otherKeys(settings), person = new Map(settings.people.filter(p => p.accountId && !p.archived).map(p => [p.accountId, settings.people.indexOf(p)]));
+    if (!keys.length || !person.size) return { external: [], externalNoEstimate: 0 };
+    // shortcut: the 1000 issues due first; a team with more open work elsewhere sees a partial picture.
+    const issues = await searchAll('project in (' + keys.map(k => '"' + k + '"').join(',') + ') AND statusCategory != Done AND assignee in (' + [...person.keys()].map(id => '"' + id + '"').join(',') + ') ORDER BY duedate ASC', ['summary', 'project', 'assignee', 'timeestimate', 'timeoriginalestimate', 'duedate'], 1000);
+    const external = [];
+    let externalNoEstimate = 0;
+    for (const { key, fields: f = {} } of issues) {
+      const who = person.get(f.assignee?.accountId), sec = f.timeestimate ?? f.timeoriginalestimate;
+      if (who === undefined || f.timeestimate === 0) continue; // nothing left to do
+      if (!(sec > 0)) { externalNoEstimate++; continue; }
+      external.push({ key, summary: String(f.summary ?? '').slice(0, 80), project: f.project?.key ?? '', who, hours: Math.round(sec / 360) / 10, to: /^\d{4}-\d{2}-\d{2}$/.test(f.duedate ?? '') ? f.duedate : '' });
+    }
+    return { external: external.slice(0, 500), externalNoEstimate };
+  }
+
+  /** Hours logged on each Relay project over the last complete months, for projects whose monthly load is measured. */
+  async function measureLoads(settings, state, day) {
+    const range = pastMonths(day), hours = {};
+    for (const e of await timesheets(settings, state, range, 2000)) if (e.p != null && e.absence == null) hours[e.p] = (hours[e.p] ?? 0) + e.minutes / 60;
+    return { ...range, months: LOAD_MONTHS, hours: Object.fromEntries(Object.entries(hours).map(([p, h]) => [p, Math.round(h * 10) / 10])), at: new Date().toISOString() };
+  }
+  async function saveLoads(settings, state, day, by) {
+    const next = { ...state, loadHistory: await measureLoads(settings, state, day) };
+    logChange(next, by, 'Measured monthly loads from hours logged ' + next.loadHistory.from + ' to ' + next.loadHistory.to);
+    await savePlan(next, settings, day, state.rev);
+  }
+  /** Whether a project's monthly load is measured and the last complete month is not in it yet. */
+  const loadsStale = (settings, state, day) => settings.projects.some(p => p.load === 'auto' && !p.archived) && state.loadHistory?.to !== pastMonths(day).to;
 
   const api = {
     getWorkspace: (ctx, { demo, range }) => workspace(ctx, demo, range),
@@ -428,6 +470,15 @@ function createTeamService({ store, jira, today }) {
       return workspace(ctx, undefined, range);
     },
 
+    /** Team manager: measure monthly loads from the hours logged in the last complete months. */
+    async measureLoads(ctx, { range } = {}) {
+      const { settings, state } = await load(ctx.today), me = identify(settings, ctx.accountId);
+      if (me?.access !== 'team' && !(await ctx.isAdmin())) throw new UserError('Only the team manager can measure monthly loads.');
+      if (settings.demo) throw new UserError('Measuring logged hours works in live mode.');
+      await saveLoads(settings, state, ctx.today, me?.name ?? 'Admin');
+      return workspace(ctx, undefined, range);
+    },
+
     /** Learn from time logged on finished Jira issues. Separate from refresh so refresh stays fast. */
     async importHistory(ctx) {
       const { settings, state } = await load(ctx.today);
@@ -512,13 +563,15 @@ function createTeamService({ store, jira, today }) {
     const day = today(), { settings, state } = await load(day), active = activeProjects(settings);
     if (settings.demo || !jira || !active.length) return { skipped: true };
     const minutes = Math.ceil((now - (Date.parse(state.refreshedAt ?? '') || 0)) / 60000);
-    if (minutes < 60) {
-      const scope = 'project in (' + active.map(p => '"' + p.jiraKey + '"').join(',') + ')';
-      const changed = await jira.search({ jql: scope + ' AND updated >= -' + (minutes + 1) + 'm', fields: ['id'], maxResults: 1 });
-      if (!changed.issues?.length) return { skipped: true };
+    let changed = minutes >= 60;
+    if (!changed) {
+      const scope = 'project in (' + [...active.map(p => p.jiraKey), ...otherKeys(settings)].map(k => '"' + k + '"').join(',') + ')';
+      changed = !!(await jira.search({ jql: scope + ' AND updated >= -' + (minutes + 1) + 'm', fields: ['id'], maxResults: 1 })).issues?.length;
     }
-    await doRefresh(settings, state, day, active, 'Automatic refresh');
-    return { refreshed: true };
+    if (changed) await doRefresh(settings, state, day, active, 'Automatic refresh');
+    // Monthly loads are measured once a month, after it closes. shortcut: a failing measurement retries every 5 minutes; fine while it is rare.
+    if (loadsStale(settings, state, day)) await saveLoads(settings, (await load(day)).state, day, 'Automatic refresh').catch(e => console.error('measureLoads', e));
+    return changed ? { refreshed: true } : { skipped: true };
   }
 
   /** After a change in live mode: move the Jira status on start and finish, and tell owners whose plan changed. Returns a warning or ''. */

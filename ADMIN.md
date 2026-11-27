@@ -5,7 +5,7 @@ It was written by a team member as a private, free contribution under the MIT li
 
 ## What it does
 
-- Adds **Apps → Team Planner Relay**: work queue, team calendar, project outlook and timesheets, for one or more planning teams.
+- Adds **Apps → Team Planner Relay**: work queue, team calendar, monthly capacity, project outlook and timesheets, for one or more planning teams.
 - Adds a **Team plan** panel to Jira issues: who the issue is planned for, when, and the project forecast.
 - Adds **Jira settings → Apps → Team Planner Relay settings** (admins only): team members, connected Jira projects, task types and estimation rules.
 - Until an admin switches it to live mode, it only shows fictional demo data. Nothing is read from Jira in demo mode.
@@ -14,7 +14,7 @@ It was written by a team member as a private, free contribution under the MIT li
 
 | Permission | Why |
 |---|---|
-| `read:jira-work` | Read issues and work logs of the projects you connect, and check which issues a PM may see |
+| `read:jira-work` | Read issues and work logs of the projects you connect (and, if set, open issues assigned to the team in other projects you list), and check which issues a PM may see |
 | `write:jira-work` | Log time as Jira work logs; when a team manager asks, set an issue's assignee or due date |
 | `read:jira-user` | Find people when adding team members; check that the caller is a Jira admin for the settings page |
 | `storage:app` | Store planning data (assignments, estimates, timesheets) in Forge storage inside this installation |
@@ -66,7 +66,8 @@ A sandbox or test site is a good first stop.
 3. **Projects:** connect one pilot project; choose its lead, backup and project managers (people whose role is Project manager).
    One Jira project used for several customers or products (e.g. a support project split by component)? Connect it once per Relay project. In each, choose *Split by* (Components, or a Jira field such as a custom *Project* field) and the values it takes. Issues go to the project whose value they carry, with that project's lead and backup; one project may leave the values empty to take the rest.
 4. **Task types:** the *Jira work types* table lists the work types your connected projects use; choose the Relay task type each is planned as, or create one from it. Components and labels can narrow a type further.
-5. Save, then press *Refresh from Jira now*. From then on the team manager can change the team's people, projects and rules from **Settings** in the planner, without a Jira admin; switching between demo and live data and adding teams stay with Jira admins. Issues that can't be matched are listed under *Needs mapping*.
+5. Optional, for the **Capacity** page: on a support project choose a *Monthly load* (measured from logged hours, or fixed hours), and under *Calendar → Monthly capacity* list other Jira projects whose work assigned to the team should count.
+6. Save, then press *Refresh from Jira now*. From then on the team manager can change the team's people, projects and rules from **Settings** in the planner, without a Jira admin; switching between demo and live data and adding teams stay with Jira admins. Issues that can't be matched are listed under *Needs mapping*.
 
 ## Support and privacy
 

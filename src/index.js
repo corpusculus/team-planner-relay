@@ -65,7 +65,7 @@ const service = createService({ store, jira: userJira });
 const appService = createService({ store, jira: makeJira(() => api.asApp()) });
 
 const resolver = new Resolver();
-for (const name of ['getWorkspace', 'apply', 'undo', 'pushToJira', 'getSettings', 'saveSettings', 'forgetPerson', 'refresh', 'importHistory', 'jiraProjects', 'jiraFields', 'jiraWorkTypes', 'searchUsers', 'listTeams', 'addTeam', 'renameTeam', 'issuePlan'])
+for (const name of ['getWorkspace', 'apply', 'undo', 'pushToJira', 'getSettings', 'saveSettings', 'forgetPerson', 'refresh', 'measureLoads', 'importHistory', 'jiraProjects', 'jiraFields', 'jiraWorkTypes', 'searchUsers', 'listTeams', 'addTeam', 'renameTeam', 'issuePlan'])
   // The issue panel's issue comes from Forge's context, never from the browser.
   resolver.define(name, ({ payload, context }) => service.handle(name, { accountId: context.accountId, isAdmin: userJira.isAdmin, issueId: context.extension?.issue?.id }, payload));
 

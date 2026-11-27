@@ -5,6 +5,7 @@ import { $, esc, options, modal } from '../common/ui.js';
 import { rulesHtml } from '../common/rules.js';
 import { leaveMode, LEAVE_REASONS } from '../../src/shared/model.js';
 import { workTypeOf, assignWorkType, ignored } from '../../src/shared/jira-map.js';
+import { LOAD_MONTHS } from '../../src/shared/capacity.js';
 import './settings.css';
 
 // The page draws its own frame: it is also opened inside the planner page (#settings) for team managers.
@@ -41,12 +42,15 @@ async function load() {
     teams = (await call('listTeams')).teams;
     if (!teams.some(t => t.id === session.team)) session.team = teams[0].id;
     meta = await call('getSettings');
-    saved = meta.settings; saved.general.absenceIssues ??= {}; s = structuredClone(saved); dirty = false;
+    saved = prep(meta.settings); s = structuredClone(saved); dirty = false;
     render(); status(meta.refreshedAt ? 'Jira refreshed ' + new Date(meta.refreshedAt).toLocaleString('en-GB') : '');
   } catch (e) { $('view').innerHTML = '<div class="error-panel">' + esc(e.message) + '</div>'; return; }
   // Jira's project, field and work type lists fill in after the page shows, instead of holding it up.
   try { await loadJira(); render(); } catch (e) { status(e.message, true); }
 }
+
+/** Objects the form writes into by path, missing in settings saved by older versions. */
+function prep(x) { x.general.absenceIssues ??= {}; return x; }
 
 // ---- small form helpers; data-path is a dotted path into the settings object ----
 const text = (path, value, attrs = '') => '<input data-path="' + path + '" value="' + esc(value) + '" ' + attrs + '>';
@@ -105,6 +109,13 @@ function render() {
     group('Time off in Jira', '<div class="checks">' + bool('general.absenceToJira', g.absenceToJira, 'Record time off taken as Jira work logs, so it is kept apart from customer work') + '</div>', g.absenceToJira ? 'Members record it from their timesheet once the day has come. Each kind of time off goes on its own issue below; a kind left empty uses the “no reason given” issue.' : 'Off: time off stays in Relay only. Turn it on once you have a Jira project for it.', 'full') +
     (g.absenceToJira ? ['none', ...LEAVE_REASONS].map(r => field(r === 'none' ? 'Time off (no reason given)' : r, text('general.absenceIssues.' + r, g.absenceIssues?.[r] ?? '', 'placeholder="e.g. ABS-' + (r === 'none' ? 1 : LEAVE_REASONS.indexOf(r) + 2) + '"'))).join('') : '') +
     group('Public holidays', '<div class="holiday-editor"><div class="link-row"><input type="date" id="holidayNew" aria-label="Holiday date"><button type="button" id="holidayAdd">Add holiday</button></div><div class="checks">' + (s.holidays ?? []).map((d, i) => '<span class="chip">' + esc(d) + '<button type="button" data-rm-holiday="' + i + '" aria-label="Remove ' + esc(d) + '">×</button></span>').join('') + '</div></div>', 'Nobody is planned on these days.', 'full') +
+    '</div>');
+
+  const capacityPanel = panel('Monthly capacity', 'The Capacity page compares each person’s working hours per month with planned work, other Jira work and monthly support loads.',
+    '<div class="grid-form">' +
+    field('Target utilization (%)', num('general.targetUtilization', g.targetUtilization ?? 85, 'min="50" max="100" step="1"'), 'Healthy is 50% up to this; above it is stretched. Monthly loads are given out up to it.') +
+    field('Default monthly load (hours)', num('general.loadDefault', g.loadDefault ?? 40, 'min="0" max="2000" step="1"'), 'For a project measured from logged hours that has none yet.') +
+    field('Other Jira projects', text('general.loadProjects', g.loadProjects ?? '', 'placeholder="e.g. OPS, SEC"'), 'Keys, comma-separated. Their open issues assigned to the team count as load, up to the due date. Relay does not plan them.', 'full') +
     '</div>');
 
   const estimation = panel('Estimation', 'How Relay sizes a task. History wins when there is enough of it; otherwise the type default is scaled by system size and complexity.',
@@ -167,7 +178,7 @@ function render() {
       const pms = s.people.map((x, j) => [x, j]).filter(([x]) => x.access === 'pm' && !x.archived);
       const covered = [...new Set([...(s.people[p.lead]?.skills ?? []), ...(s.people[p.back]?.skills ?? [])])];
       const pmNames = pms.filter(([x]) => (x.pmProjects ?? []).includes(i)).map(([x]) => x.name).join(', ');
-      return card('projects:' + i, p.name, [p.jiraKey ? p.jiraKey + (p.components ? ' · ' + (p.splitField ? fieldName(p.splitField) + ': ' : '') + p.components : '') : s.demo ? null : 'no Jira key', 'lead ' + (s.people[p.lead]?.name ?? 'none'), p.back != null && 'backup ' + s.people[p.back]?.name, pmNames && 'PM ' + pmNames, p.due && 'due ' + p.due, p.archived && 'archived'].filter(Boolean).join(' · '),
+      return card('projects:' + i, p.name, [p.jiraKey ? p.jiraKey + (p.components ? ' · ' + (p.splitField ? fieldName(p.splitField) + ': ' : '') + p.components : '') : s.demo ? null : 'no Jira key', 'lead ' + (s.people[p.lead]?.name ?? 'none'), p.back != null && 'backup ' + s.people[p.back]?.name, pmNames && 'PM ' + pmNames, p.due && 'due ' + p.due, p.load === 'auto' && 'measured monthly load', p.load === 'fixed' && (p.loadHours ?? 0) + 'h a month', p.archived && 'archived'].filter(Boolean).join(' · '),
         text('projects.' + i + '.name', p.name, 'aria-label="Project name"') + bool('projects.' + i + '.archived', p.archived, 'Archived'), '<div class="grid-form">' +
         field('Jira project key', text('projects.' + i + '.jiraKey', p.jiraKey, 'placeholder="e.g. PILOT"')) +
         field('Split by', sel('projects.' + i + '.splitField', [['', 'Components'], ...jiraFields.map(f => [f.id, f.name]), ...(p.splitField && !jiraFields.some(f => f.id === p.splitField) ? [[p.splitField, p.splitField]] : [])], p.splitField ?? '', 'data-rerender'), 'When several Relay projects share this Jira project: the Jira field that tells them apart.') +
@@ -175,6 +186,8 @@ function render() {
         field('Due date', '<input type="date" data-path="projects.' + i + '.due" value="' + esc(p.due) + '">') +
         field('Lead', sel('projects.' + i + '.lead', [['', 'None'], ...peopleList()], p.lead, 'data-num data-rerender')) +
         field('Backup', sel('projects.' + i + '.back', [['', 'None'], ...peopleList()], p.back, 'data-num data-rerender')) +
+        field('Monthly load', sel('projects.' + i + '.load', [['off', 'None: plan its issues only'], ['auto', 'Measured: ' + LOAD_MONTHS + '-month average of logged hours'], ['fixed', 'Fixed hours a month']], p.load ?? 'off', 'data-rerender'), 'Standing support work for the Capacity page. Goes to the lead, then the backup.') +
+        (p.load === 'fixed' ? field('Hours a month', num('projects.' + i + '.loadHours', p.loadHours ?? 0, 'min="0" max="2000" step="1"')) : '') +
         field('Custom JQL (optional)', text('projects.' + i + '.jql', p.jql, 'placeholder="project = &quot;' + esc(p.jiraKey || 'KEY') + '&quot; AND statusCategory != Done ORDER BY Rank ASC"'), 'Leave empty for all open issues in the project.', 'full') +
         (covered.length ? covered.map(sy => field('Size · ' + esc(s.systems[sy]), sel('projects.' + i + '.sizes.' + sy, s.sizes.map(z => [z.id, z.name + ' ×' + z.multiplier]), p.sizes[sy] ?? s.defaultSize))).join('') : group('System size', '<p class="hint">Choose a lead or backup with skills first.</p>', '', 'full')) +
         group('Project managers', pms.length ? '<div class="checks">' + pms.map(([x, j]) => '<label><input type="checkbox" data-pm-of="' + i + '" value="' + j + '" ' + ((x.pmProjects ?? []).includes(i) ? 'checked' : '') + '>' + esc(x.name) + '</label>').join('') + '</div>' : '<p class="hint">Set someone’s role to Project manager under People first.</p>', 'They see this project’s outlook, calendar and report.', 'full') +
@@ -194,7 +207,7 @@ function render() {
   const unmapped = s.demo ? '' : panel('Needs mapping', 'Jira issues from the last refresh that Relay could not plan. Fix a task type rule, a component, or a project contact, then refresh.',
     meta.unmapped.length ? (meta.unmappedTotal > meta.unmapped.length ? '<p class="hint">Showing ' + meta.unmapped.length + ' of ' + meta.unmappedTotal + '.</p>' : '') + table(['Issue', 'Project', 'Reason'], meta.unmapped.map(u => ['<b>' + esc(u.key) + '</b> ' + esc(u.summary), esc(u.project), esc(u.reason)])) : '<p class="empty">Nothing to map.</p>');
 
-  const sections = { start: start + unmapped + jiraUpdates + (meta.admin ? teamPanel : ''), people, projects, types: workTypes + types + systems, estimation, calendar: general, rules: rulesHtml(s, !s.demo && meta.jira) };
+  const sections = { start: start + unmapped + jiraUpdates + (meta.admin ? teamPanel : ''), people, projects, types: workTypes + types + systems, estimation, calendar: general + capacityPanel, rules: rulesHtml(s, !s.demo && meta.jira) };
   $('view').innerHTML = '<nav class="section-tabs" aria-label="Settings sections">' + TABS.map(([k, l]) => '<button type="button" class="tab' + (k === tab ? ' active' : '') + '" data-tab="' + k + '" aria-current="' + (k === tab ? 'page' : 'false') + '">' + l + '</button>').join('') + '</nav>' + sections[tab];
 }
 
@@ -232,7 +245,7 @@ const blank = {
   system: () => 'New system',
   type: () => ({ name: 'New task type', system: 0, baseHours: 8, bufferHours: 4, source: 'relay', hoursPerPoint: 4, issueTypes: '', components: '', labels: '', field: '', fieldValues: '', archived: false }),
   person: () => ({ name: 'New person', role: '', access: 'member', skills: [], accountId: null, pmProjects: [], archived: false, days: [0, 1, 2, 3, 4], hoursPerDay: s.general.workdayHours }),
-  project: () => ({ name: 'New project', jiraKey: '', components: '', splitField: '', jql: '', due: '', lead: null, back: null, sizes: {}, factors: [], archived: false })
+  project: () => ({ name: 'New project', jiraKey: '', components: '', splitField: '', jql: '', due: '', lead: null, back: null, sizes: {}, factors: [], load: 'off', loadHours: 0, archived: false })
 };
 const listOf = { size: 'sizes', factor: 'factors', system: 'systems', type: 'types', person: 'people', project: 'projects' };
 
@@ -340,7 +353,7 @@ document.addEventListener('click', async e => {
   }
 });
 async function run(fn, message) {
-  try { meta = await fn(); saved = meta.settings; saved.general.absenceIssues ??= {}; s = structuredClone(saved); dirty = false; render(); status(message); }
+  try { meta = await fn(); saved = prep(meta.settings); s = structuredClone(saved); dirty = false; render(); status(message); }
   catch (err) { status(err.message, true); }
 }
 $('close').onclick = () => $('modal').close();

@@ -1,6 +1,6 @@
 # Team Planner Relay
 
-Team capacity planner for Jira Cloud: work queue, calendar, coverage, PM outlook, estimates and timesheets, as an Atlassian Forge app. Free, MIT licensed.
+Team capacity planner for Jira Cloud: work queue, calendar, coverage, monthly capacity, PM outlook, estimates and timesheets, as an Atlassian Forge app. Free, MIT licensed.
 Started from `team-planner.html`; the scheduler and screens are the same, now backed by Forge storage and Jira issues.
 
 ## See it locally
@@ -38,6 +38,13 @@ Estimation: Jira estimate or story points if the task type says so; otherwise P7
 (same project+system → same system → same type), buffer up to P90; otherwise type default × system size × complexity factors.
 Hours round up to slots (default 4h, so at most 2 tasks per person per day).
 
+Capacity (`src/shared/capacity.js`, team manager): per person and month from today, gross hours − time off and holidays = net,
+against planned work with buffers, private time, other Jira work (open issues of the settings' *Other Jira projects* assigned
+to the team: remaining estimate, else original, spread over weekdays to the due date; no due date = provisional, spread over the horizon)
+and monthly loads (per project: fixed, or the average of the hours logged in the last 3 complete months, else the default).
+Loads go to the lead, then the backup, each up to the target utilization (85%); the rest is the uncovered gap. Health: under 50% underused,
+up to the target healthy, up to 100% stretched, above over. Loads do not move ticket dates. It follows the open what-if.
+
 ## Support and privacy
 
 - Support: https://github.com/corpusculus/team-planner-relay/issues
@@ -49,7 +56,8 @@ MIT, free of charge. See [LICENSE](LICENSE).
 
 ## Known limits (v1)
 
-- Time is logged only in Jira (work logs). Reading a week costs one Jira request per issue with time logged that week.
+- Time is logged only in Jira (work logs). Search results carry up to 20 work logs per issue; an issue with more costs one more request.
+- Monthly loads are measured once a month (and on request) from up to 2,000 issues with time logged; other Jira work reads up to 1,000 open issues at each refresh.
 - Writes to Jira: work logs (optionally also time off taken, on chosen issues), and on request assignee and due date. Optional (settings): status on start and finish, and comments when an issue's owner or finish changes (at most 20 per change).
 - Automatic refresh every 5 minutes when Jira changed (and at least hourly) uses the app's own Jira access; manual refresh uses the team manager's.
 - Monday–Friday workweek, with public holidays and per-person working days and hours.

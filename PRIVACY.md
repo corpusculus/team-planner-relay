@@ -24,6 +24,7 @@ work logs team members logged on those issues. When an administrator adds team m
 In Forge storage, inside your installation:
 - **Team settings:** people's display names, Jira account IDs, job titles, roles in the app and skills; projects, task types and estimation rules.
 - **Planning data:** tasks (including Jira issue keys and summaries), estimates, assignments, blockers, agreed dates, private-time labels, absences with an optional reason (such as sick leave), time-off requests and shared project notes.
+- **Capacity data:** if an administrator lists other Jira projects, the keys, summaries, estimates and dates of their open issues assigned to team members; and total hours logged per project over the last three months, for monthly loads. Only team managers see them.
 - **Estimation history:** hours spent on finished tasks and their estimates. For tasks finished in Relay it also records who finished them, for the team manager's estimate accuracy report.
 
 Timesheets are not stored by the app: time is logged as Jira work logs, which Jira stores and controls. The app only writes to Jira

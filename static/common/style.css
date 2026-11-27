@@ -358,3 +358,24 @@ textarea{width:100%;min-width:0;font:inherit;border:1px solid #c7d1cb;border-rad
 .hbar>i{flex:1;max-width:280px;height:8px;border-radius:4px;background:linear-gradient(to right,var(--accent,#3f9a83) var(--w),#edf1ec var(--w))}
 .data{font-variant-numeric:tabular-nums}
 @media(max-width:700px){.brand{display:none}.top .tool{min-width:0}}
+/* Capacity page: capacity-vs-demand bars (palette validated for colour-vision deficiency), insights and the utilization heatmap */
+.cvd{display:grid;gap:10px}
+.cvd-row{display:grid;grid-template-columns:90px minmax(120px,1fr) auto;align-items:center;gap:14px;font-size:13px}
+.cvd-row small{color:var(--muted);white-space:nowrap}
+.cvd-bars{display:grid;gap:2px}
+.cvd-bars i{display:block;height:9px;border-radius:0 4px 4px 0;min-width:2px}
+.cvd-bars .cap,.swatch.cap{background:#3a9e7e}
+.cvd-bars .dem,.swatch.dem{background:#2c5fa8}
+.swatch{display:inline-block;width:14px;height:9px;border-radius:2px}
+.insight{display:flex;gap:12px;align-items:baseline;margin:0;padding:8px 0;border-bottom:1px solid var(--line)}
+.insight:last-child{border:0}
+.heat td{padding:4px}
+.heat-cell{display:grid;width:100%;min-width:84px;padding:7px 8px;border:0;border-radius:6px;text-align:center;gap:1px;cursor:pointer}
+.heat-cell b{font-size:15px}.heat-cell small{font-size:11px}
+.heat-cell.h-underused{background:#e3ebf3;color:#3b5f80}
+.heat-cell.h-healthy{background:#dcefe6;color:#1d6b4c}
+.heat-cell.h-stretched{background:#f6ecd6;color:#7a5a17}
+.heat-cell.h-over{background:#f8e3d9;color:#8a3a1c}
+.heat-cell.h-no-capacity{background:#eee;color:#555}
+.heat-cell:hover,.heat-cell:focus-visible{outline:2px solid var(--accent,#3f9a83);outline-offset:1px}
+@media (max-width:700px){.cvd-row{grid-template-columns:70px 1fr}.cvd-row small{grid-column:1/-1}}
