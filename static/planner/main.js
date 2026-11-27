@@ -167,10 +167,11 @@ function render() {
   $('reset').hidden = !(me.demo && role === 'team');
   $('footnote').textContent = me.demo ? 'Demo portfolio · Fictional data · Switch to live mode in Relay settings' : 'Live plan · ' + (state.refreshedAt ? 'Jira refreshed ' + new Date(state.refreshedAt).toLocaleString('en-GB') : 'Not refreshed from Jira yet') + (state.unmapped.length && role === 'team' ? ' · ' + state.unmapped.length + ' Jira issues need mapping (see settings)' : '');
   $('simulate').hidden = !(role === 'team' && ['home', 'queue', 'schedule', 'coverage'].includes(tab) || personal && ['home', 'sheet', 'schedule'].includes(tab));
-  $('simulate').textContent = personal ? (tab === 'schedule' ? 'Protect time' : '＋ Log time') : '＋ Add task';
+  $('simulate').textContent = personal ? (tab === 'schedule' ? 'Protect time' : '＋ Log time') : scenario && role === 'team' ? '＋ Add task to what-if' : '＋ Add task';
+  $('whatIf').hidden = $('simulate').hidden || role !== 'team' || !!scenario;
   const ownLeave = personal && tab === 'schedule' && leaveMode(settings.general) !== 'off';
   $('otherChanges').hidden = $('simulate').hidden || (personal && !ownLeave);
-  $('otherChanges').textContent = personal ? 'Time off' : 'Other changes';
+  $('otherChanges').textContent = personal ? 'Time off' : scenario && role === 'team' ? 'Other changes to what-if' : 'Other changes';
   const title = tab === 'home' ? (personal ? 'My work' : 'Team overview') : tab === 'sheet' ? 'My timesheet' : tab === 'schedule' && personal ? 'My calendar' : tab === 'schedule' && pm ? 'Project calendar' : tab === 'report' ? (personal ? 'My report' : pm ? 'Project report' : 'Team report') : pageInfo[tab][0];
   $('title').textContent = title;
   const counts = active(people).length + ' people across ' + active(projects).length + ' projects';
@@ -386,8 +387,10 @@ function changeForm(v = {}) {
 /** The unsaved what-if: its changes and how the milestones move against the current plan. */
 function scenarioPanel() {
   const { list, summaries, next, slots } = scenario, n = list.length, moved = movedIn(slots).length;
-  return '<section class="panel" id="scenario"><div class="section-head"><div><h2>What-if scenario · not saved</h2><p>' + n + ' change' + (n === 1 ? '' : 's') + ' · ' + moved + ' existing assignment' + (moved === 1 ? ' moves' : 's move') + '. The calendar and reports still show the current plan; add more changes with Add task or Other changes.</p></div></div><div class="content"><ol>' + summaries.map(x => '<li>' + esc(x) + '</li>').join('') + '</ol><h3>Milestone impact</h3>' + impact(next, slots).html +
-    '<div class="actions"><button id="discardScenario">Discard scenario</button><button class="primary" id="applyScenario">Apply ' + n + ' change' + (n === 1 ? '' : 's') + '</button></div></div></section>';
+  const head = '<section class="panel" id="scenario"><div class="section-head"><div><h2>What-if · not saved</h2><p>';
+  if (!n) return head + 'Try changes with Add task or Other changes: they collect here, with how they move the milestones. The plan is not changed until you apply them.</p></div></div><div class="content"><div class="actions"><button id="discardScenario">Close what-if</button></div></div></section>';
+  return head + n + ' change' + (n === 1 ? '' : 's') + ' · ' + moved + ' existing assignment' + (moved === 1 ? ' moves' : 's move') + '. The calendar and reports still show the current plan; add more changes with Add task or Other changes.</p></div></div><div class="content"><ol>' + summaries.map(x => '<li>' + esc(x) + '</li>').join('') + '</ol><h3>Milestone impact</h3>' + impact(next, slots).html +
+    '<div class="actions"><button id="discardScenario">Discard what-if</button><button class="primary" id="applyScenario">Apply ' + n + ' change' + (n === 1 ? '' : 's') + '</button></div></div></section>';
 }
 
 function preview(v) {
@@ -405,7 +408,7 @@ function preview(v) {
   const changed = impact(next, slots);
   const newTask = next.tasks.length > base.next.tasks.length ? next.tasks[next.tasks.length - 1] : null;
   const more = whatIf && (scenario?.list.length ?? 0) < 20;
-  const buttons = whatIf && scenario ? (more ? '<button class="primary" id="addScenario">Add to scenario</button>' : '<span class="sub">A scenario holds up to 20 changes.</span>') : (more ? '<button id="addScenario">Try with more changes</button>' : '') + '<button class="primary" id="apply">Apply change</button>';
+  const buttons = whatIf && scenario ? (more ? '<button class="primary" id="addScenario">Add to what-if</button>' : '<span class="sub">A scenario holds up to 20 changes.</span>') : (more ? '<button id="addScenario">Start a what-if with this</button>' : '') + '<button class="primary" id="apply">Apply change</button>';
   const desc = x => who(x.who).short + ' · ' + span(x.start, x.end - 1);
   const newRow = newTask ? '<div class="detail"><b>New assignment</b>' + esc(desc(slots.get(newTask.id))) + '</div>' : '';
   modal(base === scenario ? 'Scenario preview' : 'Change preview', '<p>' + esc(summary) + '</p>' + (base === scenario ? '<p class="sub">Compared with the current plan, with the ' + scenario.list.length + ' change' + (scenario.list.length === 1 ? '' : 's') + ' already in the scenario.</p>' : '') + '<div class="note"><b>' + moved.length + ' existing assignment' + (moved.length === 1 ? '' : 's') + ' changed · ' + changed.count + ' milestone' + (changed.count === 1 ? '' : 's') + ' moved</b></div>' + newRow + '<h3>Milestone impact</h3>' + changed.html + (moved.length ? '<details><summary>Inspect ' + moved.length + ' changed assignment' + (moved.length === 1 ? '' : 's') + '</summary>' + moved.map(t => '<div class="detail"><b>' + esc(projects[t.p].name) + ' · ' + esc(t.name) + '</b><small>' + esc(desc(plan.get(t.id))) + ' → ' + esc(desc(slots.get(t.id))) + '</small></div>').join('') + '</details>' : '') + '<div class="actions"><button id="editChange">Edit change</button><button data-dismiss>Discard</button>' + buttons + '</div>');
@@ -427,6 +430,7 @@ function announce(text) {
 $('modal').addEventListener('close', () => { draft = null; formValues = null; });
 $('close').onclick = () => $('modal').close();
 $('simulate').onclick = () => (role === 'member' ? (tab === 'schedule' ? changeForm({ kind: 'private', who: member }) : logForm()) : changeForm());
+$('whatIf').onclick = () => { scenario = replay([]); render(); announce('What-if started. Nothing is saved until you apply it.'); };
 $('otherChanges').onclick = () => changeForm({ kind: 'leave', ...(role === 'member' ? { who: member } : {}) });
 $('reset').onclick = () => modal('Reset sample plan?', '<p>This restores the original assignments and time off and removes the changes you applied to the demo.</p><div class="actions"><button data-dismiss>Cancel</button><button id="confirmReset" class="primary">Reset demo</button></div>');
 $('settingsLink').onclick = () => { location.href = '../settings/'; };
@@ -512,7 +516,7 @@ document.addEventListener('click', e => {
     scenario = replay([...(scenario?.list ?? []), formValues]);
     $('modal').close(); render(); announce('Added to the what-if scenario. Nothing is saved until you apply it.');
   }
-  if (b.id === 'discardScenario') { scenario = null; render(); announce('Scenario discarded. The plan is unchanged.'); }
+  if (b.id === 'discardScenario') { scenario = null; render(); announce('What-if closed. The plan is unchanged.'); }
   if (b.id === 'applyScenario' && scenario) {
     // Cleared first so the new workspace is not replayed on top of itself; restored if the change fails.
     const list = scenario.list;
