@@ -42,9 +42,10 @@ async function load() {
     if (!teams.some(t => t.id === session.team)) session.team = teams[0].id;
     meta = await call('getSettings');
     saved = meta.settings; saved.general.absenceIssues ??= {}; s = structuredClone(saved); dirty = false;
-    await loadJira();
     render(); status(meta.refreshedAt ? 'Jira refreshed ' + new Date(meta.refreshedAt).toLocaleString('en-GB') : '');
-  } catch (e) { $('view').innerHTML = '<div class="error-panel">' + esc(e.message) + '</div>'; }
+  } catch (e) { $('view').innerHTML = '<div class="error-panel">' + esc(e.message) + '</div>'; return; }
+  // Jira's project, field and work type lists fill in after the page shows, instead of holding it up.
+  try { await loadJira(); render(); } catch (e) { status(e.message, true); }
 }
 
 // ---- small form helpers; data-path is a dotted path into the settings object ----
